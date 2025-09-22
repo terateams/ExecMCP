@@ -1,0 +1,402 @@
+package security
+
+import (
+	"testing"
+
+	"github.com/your-username/ExecMCP/internal/config"
+)
+
+func TestFilter_Check_DenylistExact(t *testing.T) {
+	// 创建测试配置
+	cfg := &config.SecurityConfig{
+		DenylistExact: []string{"rm", "dd", "mkfs", "shutdown", "reboot"},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试被禁止的命令
+	deniedCommands := []string{"rm", "dd", "mkfs", "shutdown", "reboot"}
+	for _, cmd := range deniedCommands {
+		req := ExecRequest{
+			Command: cmd,
+			Args:    []string{},
+		}
+
+		err := filter.Check(req)
+		if err == nil {
+			t.Errorf("期望命令 '%s' 被拒绝，但通过了检查", cmd)
+		}
+
+		if secErr, ok := err.(*SecurityError); ok {
+			if secErr.Code != "SECURITY_DENY" {
+				t.Errorf("期望错误码为 'SECURITY_DENY'，但得到 '%s'", secErr.Code)
+			}
+		} else {
+			t.Errorf("期望 SecurityError 类型，但得到 %T", err)
+		}
+	}
+
+	// 测试允许的命令
+	allowedCommands := []string{"ls", "cat", "echo", "pwd"}
+	for _, cmd := range allowedCommands {
+		req := ExecRequest{
+			Command: cmd,
+			Args:    []string{},
+		}
+
+		err := filter.Check(req)
+		if err != nil {
+			t.Errorf("期望命令 '%s' 通过检查，但被拒绝: %v", cmd, err)
+		}
+	}
+}
+
+func TestFilter_Check_DenylistRegex(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		DenylistRegex: []string{
+			`^rm\..*`, // rm 命令的各种变体
+		},
+		ArgDenyRegex: []string{
+			`.*;.*`,  // 命令串接
+			`.*&&.*`, // 逻辑与操作
+		},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试正则拒绝的命令
+	testCases := []struct {
+		command string
+		args    []string
+		desc    string
+	}{
+		{"rm.rf", []string{}, "rm 命令变体"},
+		{"echo", []string{"hello;world"}, "包含分号的参数"},
+		{"ls", []string{"&&", "echo", "test"}, "包含 && 的参数"},
+	}
+
+	for _, tc := range testCases {
+		req := ExecRequest{
+			Command: tc.command,
+			Args:    tc.args,
+		}
+
+		err := filter.Check(req)
+		if err == nil {
+			t.Errorf("期望 '%s' 被正则拒绝，但通过了检查: %s", tc.desc, tc.command)
+		}
+	}
+}
+
+func TestFilter_Check_ArgDenyRegex(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		ArgDenyRegex: []string{
+			`-{1,2}force`,        // force 参数
+			`--no-preserve-root`, // 不保留根目录
+			`--recursive`,        // 递归操作
+			`/dev/sd[a-z].*`,     // 块设备操作
+		},
+		AllowlistExact: []string{"rm"}, // 允许 rm 命令但限制参数
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试危险参数
+	testCases := []struct {
+		command string
+		args    []string
+		desc    string
+	}{
+		{"rm", []string{"-force"}, "force 参数"},
+		{"rm", []string{"--no-preserve-root"}, "no-preserve-root 参数"},
+		{"dd", []string{"if=/dev/sda"}, "块设备操作"},
+		{"chmod", []string{"-R", "755"}, "递归参数"},
+	}
+
+	for _, tc := range testCases {
+		req := ExecRequest{
+			Command: tc.command,
+			Args:    tc.args,
+		}
+
+		err := filter.Check(req)
+		if err == nil {
+			t.Errorf("期望 '%s' 被参数拒绝，但通过了检查", tc.desc)
+		}
+	}
+
+	// 测试安全参数
+	req := ExecRequest{
+		Command: "rm",
+		Args:    []string{"file.txt"},
+	}
+
+	err := filter.Check(req)
+	if err != nil {
+		t.Errorf("期望安全参数通过检查，但被拒绝: %v", err)
+	}
+}
+
+func TestFilter_Check_Allowlist(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		AllowlistExact: []string{"ls", "cat", "grep", "find"},
+		AllowlistRegex: []string{`^systemctl.*`, `^journalctl.*`},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试允许的命令
+	allowedCommands := []struct {
+		command string
+		args    []string
+		desc    string
+	}{
+		{"ls", []string{"-la"}, "精确允许的命令"},
+		{"cat", []string{"file.txt"}, "精确允许的命令"},
+		{"systemctl", []string{"status", "nginx"}, "正则允许的命令"},
+		{"journalctl", []string{"-u", "nginx"}, "正则允许的命令"},
+	}
+
+	for _, tc := range allowedCommands {
+		req := ExecRequest{
+			Command: tc.command,
+			Args:    tc.args,
+		}
+
+		err := filter.Check(req)
+		if err != nil {
+			t.Errorf("期望 '%s' 通过白名单检查，但被拒绝: %v", tc.desc, err)
+		}
+	}
+
+	// 测试拒绝的命令
+	deniedCommands := []string{"rm", "dd", "vi", "emacs"}
+	for _, cmd := range deniedCommands {
+		req := ExecRequest{
+			Command: cmd,
+			Args:    []string{},
+		}
+
+		err := filter.Check(req)
+		if err == nil {
+			t.Errorf("期望命令 '%s' 被白名单拒绝，但通过了检查", cmd)
+		}
+	}
+}
+
+func TestFilter_Check_ShellUsage(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		DefaultShell:   false,
+		AllowShellFor:  []string{"bash", "sh"},
+		AllowlistExact: []string{"bash", "sh", "ls"},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试不允许使用 shell 的命令
+	testCases := []struct {
+		command    string
+		useShell   bool
+		shouldPass bool
+		desc       string
+	}{
+		{"ls", false, true, "非 shell 模式的允许命令"},
+		{"ls", true, false, "不允许使用 shell 的命令"},
+		{"bash", true, true, "允许使用 shell 的 bash"},
+		{"sh", true, true, "允许使用 shell 的 sh"},
+		{"bash", false, false, "bash 必须使用 shell"},
+	}
+
+	for _, tc := range testCases {
+		req := ExecRequest{
+			Command: tc.command,
+			Args:    []string{},
+			Options: ExecOptions{
+				UseShell: tc.useShell,
+			},
+		}
+
+		err := filter.Check(req)
+		if tc.shouldPass && err != nil {
+			t.Errorf("期望 '%s' 通过检查，但被拒绝: %v", tc.desc, err)
+		}
+		if !tc.shouldPass && err == nil {
+			t.Errorf("期望 '%s' 被拒绝，但通过了检查", tc.desc)
+		}
+	}
+}
+
+func TestFilter_Check_ShellInjection(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		AllowShellFor:  []string{"bash"},
+		AllowlistExact: []string{"bash"},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试 shell 注入攻击
+	injectionPatterns := []struct {
+		args []string
+		desc string
+	}{
+		{[]string{"command1;command2"}, "分号分隔的命令"},
+		{[]string{"command1", "&&", "command2"}, "逻辑与操作"},
+		{[]string{"command1", "||", "command2"}, "逻辑或操作"},
+		{[]string{"command1", "|", "command2"}, "管道操作"},
+		{[]string{"command1", ">", "file.txt"}, "输出重定向"},
+		{[]string{"command1", ">>", "file.txt"}, "输出追加"},
+		{[]string{"command1", "<", "input.txt"}, "输入重定向"},
+	}
+
+	for _, pattern := range injectionPatterns {
+		req := ExecRequest{
+			Command: "bash",
+			Args:    pattern.args,
+			Options: ExecOptions{
+				UseShell: true,
+			},
+		}
+
+		err := filter.Check(req)
+		if err == nil {
+			t.Errorf("期望 shell 注入 '%s' 被拒绝，但通过了检查", pattern.desc)
+		}
+	}
+
+	// 测试安全的 shell 参数
+	req := ExecRequest{
+		Command: "bash",
+		Args:    []string{"-c", "echo hello"},
+		Options: ExecOptions{
+			UseShell: true,
+		},
+	}
+
+	err := filter.Check(req)
+	if err != nil {
+		t.Errorf("期望安全的 shell 参数通过检查，但被拒绝: %v", err)
+	}
+}
+
+func TestFilter_Check_WorkingDirectory(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		WorkingDirAllow: []string{"/tmp", "/var/log", "/home/user"},
+		AllowlistExact:  []string{"ls"},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试允许的工作目录
+	allowedDirs := []string{"/tmp", "/var/log", "/home/user", "/home/user/docs"}
+	for _, dir := range allowedDirs {
+		req := ExecRequest{
+			Command: "ls",
+			Args:    []string{},
+			Options: ExecOptions{
+				CWD: dir,
+			},
+		}
+
+		err := filter.Check(req)
+		if err != nil {
+			t.Errorf("期望工作目录 '%s' 通过检查，但被拒绝: %v", dir, err)
+		}
+	}
+
+	// 测试拒绝的工作目录
+	deniedDirs := []string{"/root", "/etc", "/usr", "/var", "/home/user/../../etc"}
+	for _, dir := range deniedDirs {
+		req := ExecRequest{
+			Command: "ls",
+			Args:    []string{},
+			Options: ExecOptions{
+				CWD: dir,
+			},
+		}
+
+		err := filter.Check(req)
+		if err == nil {
+			t.Errorf("期望工作目录 '%s' 被拒绝，但通过了检查", dir)
+		}
+	}
+}
+
+func TestFilter_Check_EmptyCommand(t *testing.T) {
+	cfg := &config.SecurityConfig{}
+	filter := NewFilter(cfg)
+
+	req := ExecRequest{
+		Command: "",
+		Args:    []string{},
+	}
+
+	err := filter.Check(req)
+	if err == nil {
+		t.Error("期望空命令被拒绝，但通过了检查")
+	}
+
+	if secErr, ok := err.(*SecurityError); ok {
+		if secErr.Code != "EMPTY_COMMAND" {
+			t.Errorf("期望错误码为 'EMPTY_COMMAND'，但得到 '%s'", secErr.Code)
+		}
+	}
+}
+
+func TestFilter_Check_DefaultValues(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		AllowlistExact: []string{"ls"},
+	}
+
+	filter := NewFilter(cfg)
+
+	// 测试默认值应该被应用
+	req := ExecRequest{
+		Command: "ls",
+		Args:    []string{},
+		Options: ExecOptions{
+			UseShell: false, // 默认应该是 false
+		},
+	}
+
+	err := filter.Check(req)
+	if err != nil {
+		t.Errorf("期望默认配置通过检查，但被拒绝: %v", err)
+	}
+}
+
+func TestSecurityError_Error(t *testing.T) {
+	err := &SecurityError{
+		Code:    "TEST_ERROR",
+		Message: "Test error message",
+	}
+
+	if err.Error() != "Test error message" {
+		t.Errorf("期望错误消息为 'Test error message'，但得到 '%s'", err.Error())
+	}
+}
+
+func BenchmarkFilter_Check(b *testing.B) {
+	cfg := &config.SecurityConfig{
+		DenylistExact:   []string{"rm", "dd", "mkfs"},
+		AllowlistExact:  []string{"ls", "cat", "echo"},
+		WorkingDirAllow: []string{"/tmp", "/var/log"},
+	}
+
+	filter := NewFilter(cfg)
+
+	req := ExecRequest{
+		Command: "ls",
+		Args:    []string{"-la", "/tmp"},
+		Options: ExecOptions{
+			CWD: "/tmp",
+		},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err := filter.Check(req)
+		if err != nil {
+			b.Fatalf("基准测试失败: %v", err)
+		}
+	}
+}

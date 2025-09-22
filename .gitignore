@@ -1,0 +1,63 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+mcpserver
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Environment files
+.env
+.env.local
+
+# Configuration files with sensitive data
+config.yaml
+config.local.yaml
+
+# Log files
+*.log
+logs/
+
+# IDE files
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+
+# Coverage reports
+coverage.html
+coverage.xml
+
+# Dependency directories
+vendor/
+
+# Build artifacts
+dist/
+build/
+config.test.yaml
+__debug_*
+/mcptest
+*。log

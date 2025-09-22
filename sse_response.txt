@@ -1,0 +1,3 @@
+event: endpoint
+data: http://127.0.0.1:8080/mcp/message?sessionId=b2449e6e-f85f-4583-8536-3693e8819f3e
+
