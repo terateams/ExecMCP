@@ -375,18 +375,11 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 	}
 
 	response := map[string]interface{}{
-		"success":      true,
-		"host_id":      hostID,
-		"host_address": hostConfig.Addr,
-		"host_user":    hostConfig.User,
-		"auth_method":  hostConfig.AuthMethod,
-		"status":       "connected",
-		"tested_at":    time.Now().Format(time.RFC3339),
-		"notes": []string{
-			"SSH 连接正常",
-			fmt.Sprintf("认证方式: %s", hostConfig.AuthMethod),
-			"可以执行命令",
-		},
+		"success":   true,
+		"host_id":   hostID,
+		"status":    "connected",
+		"tested_at": time.Now().Format(time.RFC3339),
+		"notes":     []string{"SSH 连接正常"},
 	}
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")
@@ -400,20 +393,10 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 	for _, host := range m.config.SSHHosts {
 		hostInfo := map[string]interface{}{
 			"id":                  host.ID,
-			"address":             host.Addr,
-			"user":                host.User,
-			"auth_method":         host.AuthMethod,
+			"auth_type":           host.AuthMethod,
 			"connect_timeout_sec": host.ConnectTimeout,
 			"keepalive_sec":       host.KeepaliveSec,
 			"max_sessions":        host.MaxSessions,
-		}
-
-		// 添加认证相关信息
-		if host.AuthMethod == "private_key" && host.PrivateKeyPath != "" {
-			hostInfo["private_key_path"] = host.PrivateKeyPath
-		}
-		if host.KnownHosts != "" {
-			hostInfo["known_hosts"] = host.KnownHosts
 		}
 
 		hosts = append(hosts, hostInfo)
