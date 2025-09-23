@@ -5,10 +5,9 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
+	"github.com/terateams/ExecMCP/internal/common"
 	"gopkg.in/yaml.v3"
 )
 
@@ -247,13 +246,7 @@ func expandPaths(config *Config) {
 // 支持 ~/path 格式的路径，自动转换为用户主目录下的绝对路径
 // 如果展开失败，返回原路径
 func expandPath(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return path
+	return common.ExpandPath(path)
 }
 
 // applyEnvOverrides 应用环境变量覆盖配置
@@ -311,7 +304,7 @@ func applyLoggingEnvOverrides(config *Config) {
 // 支持格式：id:addr:user:auth_method[:private_key_path|:password]
 // 示例：EXECMCP_SSH_HOST="server1:192.168.1.100:ubuntu:private_key:/path/to/key"
 func applyDynamicSSHHost(config *Config) {
-	if sshHost := os.Getenv(EnvSSHHost); sshHost != "" {
+	if sshHost := common.GetEnv(EnvSSHHost, ""); sshHost != "" {
 		parts := strings.Split(sshHost, ":")
 		if len(parts) >= 4 {
 			newHost := SSHHost{
@@ -359,41 +352,35 @@ func applyDynamicSecurityRules(config *Config) {
 
 // setStringFromEnv 从环境变量设置字符串值
 func setStringFromEnv(target *string, envKey string) {
-	if value := os.Getenv(envKey); value != "" {
+	if value := common.GetEnv(envKey, ""); value != "" {
 		*target = value
 	}
 }
 
 // setIntFromEnv 从环境变量设置整数值
 func setIntFromEnv(target *int, envKey string) {
-	if value := os.Getenv(envKey); value != "" {
-		if val, err := strconv.Atoi(value); err == nil {
-			*target = val
-		}
+	if val := common.GetEnvInt(envKey, 0); val != 0 {
+		*target = val
 	}
 }
 
 // setInt64FromEnv 从环境变量设置int64值
 func setInt64FromEnv(target *int64, envKey string) {
-	if value := os.Getenv(envKey); value != "" {
-		if val, err := strconv.ParseInt(value, 10, 64); err == nil {
-			*target = val
-		}
+	if val := common.GetEnvInt64(envKey, 0); val != 0 {
+		*target = val
 	}
 }
 
 // setBoolFromEnv 从环境变量设置布尔值
 func setBoolFromEnv(target *bool, envKey string) {
-	if value := os.Getenv(envKey); value != "" {
-		if val, err := strconv.ParseBool(value); err == nil {
-			*target = val
-		}
-	}
+	*target = common.GetEnvBool(envKey, false)
 }
 
 // appendStringSliceFromEnv 从环境变量追加字符串切片
 func appendStringSliceFromEnv(target *[]string, envKey string) {
-	if value := os.Getenv(envKey); value != "" {
-		*target = append(*target, strings.Split(value, ",")...)
+	if value := common.GetEnv(envKey, ""); value != "" {
+		*target = append(*target, common.SplitCommaSeparated(value)...)
 	}
 }
+
+

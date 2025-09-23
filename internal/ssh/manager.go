@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
+	"github.com/terateams/ExecMCP/internal/common"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
 )
@@ -135,7 +136,7 @@ func (m *RealManager) createNewSession(conn *RealConnection) (Session, error) {
 	if conn.Client == nil {
 		client, err := m.createSSHClient(conn.hostConfig)
 		if err != nil {
-			return nil, fmt.Errorf("创建SSH客户端失败: %w", err)
+			return nil, common.SSHError("创建客户端", conn.hostConfig.ID, err)
 		}
 		conn.Client = client
 	}
@@ -201,7 +202,7 @@ func (m *RealManager) createSSHClient(hostConfig config.SSHHost) (*ssh.Client, e
 	m.logger.Info("正在建立SSH连接", "host_id", hostConfig.ID, "address", addr, "user", hostConfig.User)
 	client, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
-		return nil, fmt.Errorf("SSH连接失败: %w", err)
+		return nil, common.SSHError("建立连接", hostConfig.ID, err)
 	}
 
 	m.logger.Info("SSH连接建立成功", "host_id", hostConfig.ID)

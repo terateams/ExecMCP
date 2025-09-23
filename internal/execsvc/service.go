@@ -8,6 +8,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/terateams/ExecMCP/internal/common"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
 	"github.com/terateams/ExecMCP/internal/security"
@@ -102,7 +103,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"host_id", req.HostID,
 			"command", req.Command,
 			"error", err)
-		return nil, fmt.Errorf("安全检查失败: %w", err)
+		return nil, common.WrapError("安全检查失败", err)
 	}
 
 	// 2. 获取 SSH 会话：通过连接管理器拿到复用的 SSH 会话，失败直接终止
@@ -111,7 +112,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		s.logger.Error("获取 SSH 会话失败",
 			"host_id", req.HostID,
 			"error", err)
-		return nil, fmt.Errorf("获取 SSH 会话失败: %w", err)
+		return nil, common.SSHError("获取会话", req.HostID, err)
 	}
 	defer s.sshManager.ReleaseSession(req.HostID, session)
 
@@ -122,7 +123,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"host_id", req.HostID,
 			"command", req.Command,
 			"error", err)
-		return nil, fmt.Errorf("命令执行失败: %w", err)
+		return nil, common.SSHError("命令执行", req.HostID, err)
 	}
 
 	// 4. 处理输出截断：避免单个命令输出过大拖垮上层调用者
@@ -177,12 +178,12 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 	// 使用安全模板引擎渲染脚本，自动处理 shell 注入风险
 	command, err := s.renderTemplate(scriptConfig.Template, mergedParams, scriptConfig.UseShell)
 	if err != nil {
-		return nil, fmt.Errorf("模板渲染失败: %w", err)
+		return nil, common.WrapError("模板渲染失败", err)
 	}
 
 	// 预留校验逻辑：未来可在此扩展类型、范围等校验
 	if err := s.validateParameters(scriptConfig, mergedParams); err != nil {
-		return nil, fmt.Errorf("参数验证失败: %w", err)
+		return nil, common.ValidationError("脚本参数", err.Error())
 	}
 
 	// 构建执行请求 - 使用脚本配置中的选项，确保行为与声明保持一致
@@ -281,12 +282,12 @@ func (s *Service) renderTemplate(templateStr string, params map[string]interface
 
 	tmpl, err := template.New("script").Funcs(funcMap).Parse(templateStr)
 	if err != nil {
-		return "", fmt.Errorf("解析模板失败: %w", err)
+		return "", common.WrapError("解析模板失败", err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, sanitized); err != nil {
-		return "", fmt.Errorf("模板渲染失败: %w", err)
+		return "", common.WrapError("模板渲染失败", err)
 	}
 
 	return buf.String(), nil

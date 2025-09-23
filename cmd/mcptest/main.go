@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	envconfig "github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/common"
 )
 
 type TestConfig struct {
@@ -88,14 +89,14 @@ func printUsage() {
 
 func getTestConfig() TestConfig {
 	cfg := TestConfig{
-		ServerURL: getEnv(envconfig.EnvMCPServerURL, "http://localhost:8081/mcp/sse"),
-		HostID:    getEnv(envconfig.EnvMCPHostID, "test-host"),
-		Command:   getEnv(envconfig.EnvMCPCommand, "whoami"),
-		UseShell:  getBoolEnv(envconfig.EnvMCPUseShell, false),
-		Timeout:   getIntEnv(envconfig.EnvMCPTimeout, 30),
+		ServerURL: common.GetEnv(envconfig.EnvMCPServerURL, "http://localhost:8081/mcp/sse"),
+		HostID:    common.GetEnv(envconfig.EnvMCPHostID, "test-host"),
+		Command:   common.GetEnv(envconfig.EnvMCPCommand, "whoami"),
+		UseShell:  common.GetEnvBool(envconfig.EnvMCPUseShell, false),
+		Timeout:   common.GetEnvInt(envconfig.EnvMCPTimeout, 30),
 	}
 
-	argsStr := getEnv(envconfig.EnvMCPArgs, "")
+	argsStr := common.GetEnv(envconfig.EnvMCPArgs, "")
 	if argsStr != "" {
 		// Simple parsing - in production you'd want something more robust
 		cfg.Args = []string{argsStr}
@@ -104,30 +105,6 @@ func getTestConfig() TestConfig {
 	return cfg
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getBoolEnv(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		return value == "true" || value == "1"
-	}
-	return defaultValue
-}
-
-func getIntEnv(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		var result int
-		_, err := fmt.Sscanf(value, "%d", &result)
-		if err == nil {
-			return result
-		}
-	}
-	return defaultValue
-}
 
 func createClient() (*client.Client, error) {
 	config := getTestConfig()
@@ -507,12 +484,12 @@ func testExecScript() {
 	}
 
 	// Get script name from environment variable or use default
-	scriptName := getEnv(envconfig.EnvMCPScriptName, "hello-world")
+	scriptName := common.GetEnv(envconfig.EnvMCPScriptName, "hello-world")
 	fmt.Printf("\nAttempting to execute script: %s...\n", scriptName)
 
 	// Parse script parameters from environment variable
 	parameters := map[string]interface{}{}
-	if paramsStr := getEnv(envconfig.EnvMCPScriptParams, ""); paramsStr != "" {
+	if paramsStr := common.GetEnv(envconfig.EnvMCPScriptParams, ""); paramsStr != "" {
 		if err := json.Unmarshal([]byte(paramsStr), &parameters); err != nil {
 			log.Printf("Failed to parse script parameters: %v", err)
 		}
