@@ -34,7 +34,7 @@ jobs:
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.PKG_GITHUB_TOKEN }}
 
     - name: Extract metadata
       id: meta
@@ -84,4 +84,4 @@ jobs:
         draft: false
         prerelease: contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc')
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.PKG_GITHUB_TOKEN }}
