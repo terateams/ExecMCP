@@ -11,8 +11,10 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/testutils"
 )
 
 func TestNewMCPServer(t *testing.T) {
@@ -33,7 +35,7 @@ func TestNewMCPServer(t *testing.T) {
 
 	logger := logging.NewLogger(cfg.Logging)
 
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
 	}
@@ -84,7 +86,7 @@ func TestMCPServer_StartAndStop(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
 	}
@@ -115,6 +117,32 @@ func TestMCPServer_StartAndStop(t *testing.T) {
 	}
 }
 
+func TestCheckAuth_AuditOnFailure(t *testing.T) {
+	recorder := testutils.NewRecordingAuditLogger()
+	mcpServer := &MCPServer{
+		config: &config.Config{Server: config.ServerConfig{AuthToken: "secret"}},
+		logger: logging.NewLogger(config.LoggingConfig{}),
+		audit:  recorder,
+	}
+
+	ctx := audit.WithContext(context.Background(), audit.ContextFields{RequestID: "test"})
+	err := mcpServer.checkAuth(ctx, mcplib.CallToolRequest{})
+	if err == nil {
+		t.Fatal("期望校验失败但成功了")
+	}
+
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("期望记录一条审计日志，得到 %d", len(events))
+	}
+	if events[0].Type != "auth_failed" {
+		t.Errorf("期望事件类型为 auth_failed，得到 %s", events[0].Type)
+	}
+	if events[0].Outcome != audit.OutcomeDenied {
+		t.Errorf("期望事件 Outcome=denied，得到 %s", events[0].Outcome)
+	}
+}
+
 func TestMCPServer_SSLEndpoint(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -132,7 +160,7 @@ func TestMCPServer_SSLEndpoint(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
 	}
@@ -189,7 +217,7 @@ func TestMCPServer_ToolsList(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
 	}
@@ -230,7 +258,7 @@ func TestMCPServer_InvalidConfig(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
 	// 即使配置有问题，服务器也应该能创建（因为 SSE 服务器会在 Start 时才绑定端口）
 	if err != nil {
@@ -251,7 +279,7 @@ func TestMCPServer_MissingSSHHosts(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
 	if err != nil {
 		t.Fatalf("期望即使没有 SSH 主机也能创建服务器，但得到错误: %v", err)
@@ -276,7 +304,7 @@ func TestMCPServer_SSEServerCreation(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
@@ -300,7 +328,7 @@ func TestMCPServer_ContextCancellation(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
@@ -328,7 +356,7 @@ func TestMCPServer_MultipleStartStop(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
@@ -366,7 +394,7 @@ func TestMCPServer_ToolHandlersExist(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
@@ -400,7 +428,7 @@ func TestMCPServer_AuthTokenRequired(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(cfg.Logging)
-	server, err := NewMCPServer(cfg, logger)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
 	}

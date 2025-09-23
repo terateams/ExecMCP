@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
 	"github.com/terateams/ExecMCP/internal/mcp"
@@ -29,12 +30,29 @@ func main() {
 	logger := logging.NewLogger(cfg.Logging)
 	logger.Info("ExecMCP 服务器启动中...", "version", "1.0.0")
 
+	auditLogger, err := audit.NewLogger(audit.Config{
+		Enabled:  cfg.Audit.IsEnabled(),
+		Format:   cfg.Audit.Format,
+		Output:   cfg.Audit.Output,
+		FilePath: cfg.Audit.FilePath,
+	}, logger)
+	if err != nil {
+		logger.Error("安全审计日志初始化失败，将使用空记录器", "error", err)
+		auditLogger = audit.NewNoopLogger()
+	}
+	defer auditLogger.Close()
+	if auditLogger.Enabled() {
+		logger.Info("安全审计日志已启用",
+			"output", cfg.Audit.Output,
+			"file_path", cfg.Audit.FilePath)
+	}
+
 	// 创建上下文
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// 初始化 MCP 服务器
-	mcpServer, err := mcp.NewMCPServer(cfg, logger)
+	mcpServer, err := mcp.NewMCPServer(cfg, logger, auditLogger)
 	if err != nil {
 		logger.Fatal("MCP 服务器初始化失败", "error", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
 	"github.com/terateams/ExecMCP/internal/security"
@@ -71,12 +72,14 @@ func newTestServiceWithConfig(t *testing.T, modify func(cfg *config.Config)) *Se
 
 	logger := newTestLogger()
 	manager := ssh.NewMockManager(cfg)
+	auditLogger := audit.NewNoopLogger()
 
 	return &Service{
 		config:     cfg,
 		logger:     logger,
 		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security, logger),
+		filter:     security.NewFilter(&cfg.Security, logger, auditLogger),
+		audit:      auditLogger,
 	}
 }
 
@@ -92,11 +95,12 @@ func newTestStreamManager(t *testing.T, modify func(cfg *config.Config)) *Stream
 
 	logger := newTestLogger()
 	manager := ssh.NewMockManager(cfg)
+	auditLogger := audit.NewNoopLogger()
 
 	return &StreamManager{
 		config:     cfg,
 		logger:     logger,
 		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security, logger),
+		filter:     security.NewFilter(&cfg.Security, logger, auditLogger),
 	}
 }

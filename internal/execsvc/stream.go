@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
 	"github.com/terateams/ExecMCP/internal/security"
@@ -50,12 +51,13 @@ func NewStreamManagerWithManager(cfg *config.Config, logger logging.Logger, mana
 		config:     cfg,
 		logger:     logger,
 		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security, logger),
+		filter:     security.NewFilter(&cfg.Security, logger, audit.NewNoopLogger()),
 	}
 }
 
 // ExecuteCommandWithStream 执行命令并返回流
 func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecRequest) (*CommandStream, error) {
+	ctx, _ = audit.EnsureContext(ctx)
 	startTime := time.Now()
 
 	sm.logger.Info("开始执行流式命令",
@@ -79,7 +81,7 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 		},
 	}
 
-	if err := sm.filter.Check(securityReq); err != nil {
+	if err := sm.filter.Check(ctx, securityReq); err != nil {
 		sm.logger.Error("命令被安全过滤拒绝",
 			"host_id", req.HostID,
 			"command", req.Command,
@@ -129,7 +131,7 @@ func (sm *StreamManager) executeCommandAsync(ctx context.Context, stream *Comman
 			close(stream.output)
 			close(stream.errorChan)
 			// 防止 panic 当通道已关闭
-			recover()
+			_ = recover()
 		}()
 
 		// 构建完整命令
@@ -294,6 +296,7 @@ func (cs *CommandStream) Close() error {
 			if cs.session != nil {
 				// 注意：在实际实现中，我们需要跟踪会话属于哪个主机
 				// 这里简化处理
+				cs.session.Close()
 			}
 
 			// 清空通道

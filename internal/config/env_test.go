@@ -148,6 +148,47 @@ func TestApplyEnvOverrides_LoggingConfig(t *testing.T) {
 	}
 }
 
+func TestApplyEnvOverrides_AuditLoggingConfig(t *testing.T) {
+	testEnvVars := map[string]string{
+		"EXECMCP_AUDIT_LOGGING_ENABLED":   "false",
+		"EXECMCP_AUDIT_LOGGING_FORMAT":    "text",
+		"EXECMCP_AUDIT_LOGGING_OUTPUT":    "stdout",
+		"EXECMCP_AUDIT_LOGGING_FILE_PATH": "/var/log/execmcp-audit.log",
+	}
+
+	originalEnv := make(map[string]string)
+	for key, value := range testEnvVars {
+		originalEnv[key] = os.Getenv(key)
+		os.Setenv(key, value)
+	}
+
+	defer func() {
+		for key, value := range originalEnv {
+			if value == "" {
+				os.Unsetenv(key)
+			} else {
+				os.Setenv(key, value)
+			}
+		}
+	}()
+
+	config := &Config{}
+	applyEnvOverrides(config)
+
+	if config.Audit.IsEnabled() {
+		t.Error("期望通过环境变量禁用安全审计日志")
+	}
+	if config.Audit.Format != "text" {
+		t.Errorf("期望安全审计日志格式为 'text'，但得到 '%s'", config.Audit.Format)
+	}
+	if config.Audit.Output != "stdout" {
+		t.Errorf("期望安全审计日志输出为 'stdout'，但得到 '%s'", config.Audit.Output)
+	}
+	if config.Audit.FilePath != "/var/log/execmcp-audit.log" {
+		t.Errorf("期望安全审计日志文件路径为 '/var/log/execmcp-audit.log'，但得到 '%s'", config.Audit.FilePath)
+	}
+}
+
 func TestApplyEnvOverrides_SSHHost(t *testing.T) {
 	// 测试添加新的SSH主机
 	os.Setenv("EXECMCP_SSH_HOST", "test-host:192.168.1.100:root:password:secret123")

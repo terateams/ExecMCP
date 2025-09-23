@@ -1,9 +1,13 @@
 package testutils
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/terateams/ExecMCP/internal/audit"
 )
 
 // EnvBackup 环境变量备份和恢复
@@ -85,3 +89,45 @@ func WithEnv(t *testing.T, key, value string, callback func()) {
 	os.Setenv(key, value)
 	callback()
 }
+
+// RecordingAuditLogger 是测试专用的审计日志记录器，用于捕获生成的事件。
+type RecordingAuditLogger struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+// NewRecordingAuditLogger 创建新的测试审计记录器。
+func NewRecordingAuditLogger() *RecordingAuditLogger {
+	return &RecordingAuditLogger{}
+}
+
+// LogEvent 记录事件并复制元数据，避免后续修改影响测试断言。
+func (r *RecordingAuditLogger) LogEvent(_ context.Context, event audit.Event) {
+	clone := event
+	if len(event.Metadata) > 0 {
+		copied := make(map[string]interface{}, len(event.Metadata))
+		for k, v := range event.Metadata {
+			copied[k] = v
+		}
+		clone.Metadata = copied
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, clone)
+}
+
+// Events 返回已记录的事件副本。
+func (r *RecordingAuditLogger) Events() []audit.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make([]audit.Event, len(r.events))
+	copy(result, r.events)
+	return result
+}
+
+// Close 满足 audit.Logger 接口，测试中无需处理。
+func (r *RecordingAuditLogger) Close() error { return nil }
+
+// Enabled 始终返回 true，确保测试路径不会被短路。
+func (r *RecordingAuditLogger) Enabled() bool { return true }

@@ -69,6 +69,20 @@ const EnvLoggingMaxBackups = "EXECMCP_LOGGING_MAX_BACKUPS"
 // EnvLoggingMaxAge 日志文件最大保存天数
 const EnvLoggingMaxAge = "EXECMCP_LOGGING_MAX_AGE"
 
+// ===== 安全审计日志配置相关环境变量 =====
+
+// EnvAuditLoggingEnabled 是否启用安全审计日志
+const EnvAuditLoggingEnabled = "EXECMCP_AUDIT_LOGGING_ENABLED"
+
+// EnvAuditLoggingFormat 安全审计日志格式
+const EnvAuditLoggingFormat = "EXECMCP_AUDIT_LOGGING_FORMAT"
+
+// EnvAuditLoggingOutput 安全审计日志输出方式
+const EnvAuditLoggingOutput = "EXECMCP_AUDIT_LOGGING_OUTPUT"
+
+// EnvAuditLoggingFilePath 安全审计日志文件路径
+const EnvAuditLoggingFilePath = "EXECMCP_AUDIT_LOGGING_FILE_PATH"
+
 // ===== SSH 主机配置相关环境变量 =====
 
 // EnvSSHHost 动态添加或替换 SSH 主机

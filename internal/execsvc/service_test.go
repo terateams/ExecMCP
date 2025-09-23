@@ -6,15 +6,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/security"
+	"github.com/terateams/ExecMCP/internal/testutils"
 )
 
 func TestNewService(t *testing.T) {
 	cfg := &config.Config{Server: config.ServerConfig{BindAddr: "127.0.0.1:8080"}}
 	logger := logging.NewLogger(config.LoggingConfig{})
 
-	svc, err := NewService(cfg, logger)
+	svc, err := NewService(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
 		t.Fatalf("期望创建服务成功，但得到错误: %v", err)
 	}
@@ -282,4 +285,35 @@ func TestService_ExecuteCommand_ContextTimeout(t *testing.T) {
 
 	_, _ = svc.ExecuteCommand(ctx, ExecRequest{HostID: "test-host", Command: "sleep", Args: []string{"1"}})
 	// 当前实现未根据上下文返回错误，测试仅确保不会 panic。
+}
+
+func TestService_ExecuteCommand_AuditEvents(t *testing.T) {
+	recorder := testutils.NewRecordingAuditLogger()
+	svc := newTestServiceWithConfig(t, nil)
+	svc.audit = recorder
+	svc.filter = security.NewFilter(&svc.config.Security, svc.logger, recorder)
+
+	_, err := svc.ExecuteCommand(context.Background(), ExecRequest{
+		HostID:  "test-host",
+		Command: "echo",
+		Args:    []string{"audit"},
+	})
+	if err != nil {
+		t.Fatalf("期望命令执行成功，但得到错误: %v", err)
+	}
+
+	events := recorder.Events()
+	if len(events) < 2 {
+		t.Fatalf("期望至少记录 2 条审计事件，但得到 %d", len(events))
+	}
+
+	if events[0].Type != "command_requested" {
+		t.Errorf("期望第一条事件为 command_requested，得到 %s", events[0].Type)
+	}
+	if events[len(events)-1].Type != "command_completed" {
+		t.Errorf("期望最后一条事件为 command_completed，得到 %s", events[len(events)-1].Type)
+	}
+	if events[len(events)-1].Outcome != audit.OutcomeSuccess {
+		t.Errorf("期望成功事件 Outcome=success，得到 %s", events[len(events)-1].Outcome)
+	}
 }

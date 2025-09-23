@@ -1,12 +1,14 @@
 package security
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
 )
@@ -15,6 +17,7 @@ import (
 type Filter struct {
 	config         *config.SecurityConfig
 	logger         logging.Logger
+	audit          audit.Logger
 	denylistRegex  []compiledPattern
 	argDenyRegex   []compiledPattern
 	allowlistRegex []compiledPattern
@@ -44,26 +47,60 @@ type ExecOptions struct {
 }
 
 // NewFilter 创建新的安全过滤器
-func NewFilter(cfg *config.SecurityConfig, logger logging.Logger) *Filter {
+func NewFilter(cfg *config.SecurityConfig, logger logging.Logger, auditLogger audit.Logger) *Filter {
+	if auditLogger == nil {
+		auditLogger = audit.NewNoopLogger()
+	}
 	return &Filter{
 		config:         cfg,
 		logger:         logger,
+		audit:          auditLogger,
 		denylistRegex:  compilePatterns(cfg.DenylistRegex),
 		argDenyRegex:   compilePatterns(cfg.ArgDenyRegex),
 		allowlistRegex: compilePatterns(cfg.AllowlistRegex),
 	}
 }
 
-func (f *Filter) logSecurityDeny(reason string, keyvals ...interface{}) {
-	if f.logger == nil {
-		return
+func (f *Filter) logSecurityDeny(ctx context.Context, rule, reason string, req ExecRequest, metadata map[string]interface{}) {
+	if metadata == nil {
+		metadata = map[string]interface{}{}
 	}
-	fields := append([]interface{}{"reason", reason}, keyvals...)
-	f.logger.Warn("安全策略拒绝", fields...)
+
+	fields := []interface{}{"rule", rule, "reason", reason, "host_id", req.HostID, "command", req.Command}
+	for k, v := range metadata {
+		fields = append(fields, k, v)
+	}
+	if f.logger != nil {
+		f.logger.Warn("安全策略拒绝", fields...)
+	}
+
+	if f.audit != nil && f.audit.Enabled() {
+		auditMeta := map[string]interface{}{
+			"args":        append([]string(nil), req.Args...),
+			"use_shell":   req.Options.UseShell,
+			"cwd":         req.Options.CWD,
+			"timeout_sec": req.Options.TimeoutSec,
+		}
+		for k, v := range metadata {
+			auditMeta[k] = v
+		}
+
+		f.audit.LogEvent(ctx, audit.Event{
+			Category: "security_filter",
+			Type:     "command_denied",
+			HostID:   req.HostID,
+			Target:   req.Command,
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Rule:     rule,
+			Reason:   reason,
+			Metadata: auditMeta,
+		})
+	}
 }
 
 // Check 按照配置逐层校验命令：先阻断黑名单、危险参数，再根据 shell 使用约束及白名单决定是否放行。
-func (f *Filter) Check(req ExecRequest) error {
+func (f *Filter) Check(ctx context.Context, req ExecRequest) error {
 	// 1. 检查空命令
 	if req.Command == "" {
 		return &SecurityError{
@@ -75,10 +112,7 @@ func (f *Filter) Check(req ExecRequest) error {
 	// 2. 检查精确黑名单
 	for _, deniedCmd := range f.config.DenylistExact {
 		if req.Command == deniedCmd {
-			f.logSecurityDeny("denylist_exact",
-				"command", req.Command,
-				"host_id", req.HostID,
-			)
+			f.logSecurityDeny(ctx, "denylist_exact", "命令命中精确黑名单", req, map[string]interface{}{})
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 被安全规则禁止", req.Command),
@@ -93,11 +127,7 @@ func (f *Filter) Check(req ExecRequest) error {
 	// 3. 检查正则黑名单
 	for _, pattern := range f.denylistRegex {
 		if pattern.re.MatchString(req.Command) {
-			f.logSecurityDeny("denylist_regex",
-				"command", req.Command,
-				"pattern", pattern.pattern,
-				"host_id", req.HostID,
-			)
+			f.logSecurityDeny(ctx, "denylist_regex", "命令匹配禁止正则", req, map[string]interface{}{"pattern": pattern.pattern})
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 匹配禁止模式 '%s'", req.Command, pattern.pattern),
@@ -114,12 +144,7 @@ func (f *Filter) Check(req ExecRequest) error {
 	for _, arg := range req.Args {
 		for _, pattern := range f.argDenyRegex {
 			if pattern.re.MatchString(arg) {
-				f.logSecurityDeny("arg_deny_regex",
-					"command", req.Command,
-					"argument", arg,
-					"pattern", pattern.pattern,
-					"host_id", req.HostID,
-				)
+				f.logSecurityDeny(ctx, "arg_deny_regex", "参数命中禁止正则", req, map[string]interface{}{"argument": arg, "pattern": pattern.pattern})
 				return &SecurityError{
 					Code:    "SECURITY_DENY",
 					Message: fmt.Sprintf("参数 '%s' 匹配禁止模式 '%s'", arg, pattern.pattern),
@@ -145,10 +170,7 @@ func (f *Filter) Check(req ExecRequest) error {
 
 	// 如果命令必须使用 shell但没有启用 shell，则拒绝
 	if requiresShell && !req.Options.UseShell {
-		f.logSecurityDeny("shell_required",
-			"command", req.Command,
-			"host_id", req.HostID,
-		)
+		f.logSecurityDeny(ctx, "shell_required", "命令要求通过 shell 执行", req, nil)
 		return &SecurityError{
 			Code:    "SECURITY_DENY",
 			Message: fmt.Sprintf("命令 '%s' 必须使用 shell 执行", req.Command),
@@ -172,10 +194,7 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 
 		if !allowed {
-			f.logSecurityDeny("shell_not_allowed",
-				"command", req.Command,
-				"host_id", req.HostID,
-			)
+			f.logSecurityDeny(ctx, "shell_not_allowed", "命令不允许使用 shell", req, map[string]interface{}{"allowed": f.config.AllowShellFor})
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 不允许使用 shell 执行", req.Command),
@@ -192,12 +211,7 @@ func (f *Filter) Check(req ExecRequest) error {
 		for _, arg := range req.Args {
 			for _, pattern := range dangerousPatterns {
 				if strings.Contains(arg, pattern) {
-					f.logSecurityDeny("shell_injection",
-						"command", req.Command,
-						"argument", arg,
-						"pattern", pattern,
-						"host_id", req.HostID,
-					)
+					f.logSecurityDeny(ctx, "shell_injection", "Shell 参数包含危险拼接符号", req, map[string]interface{}{"argument": arg, "pattern": pattern})
 					return &SecurityError{
 						Code:    "SECURITY_DENY",
 						Message: fmt.Sprintf("Shell 参数包含危险字符 '%s' 在 '%s'", pattern, arg),
@@ -237,10 +251,7 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 
 		if !allowed {
-			f.logSecurityDeny("not_in_allowlist",
-				"command", req.Command,
-				"host_id", req.HostID,
-			)
+			f.logSecurityDeny(ctx, "not_in_allowlist", "命令不在白名单中", req, nil)
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 不在允许列表中", req.Command),
@@ -263,11 +274,7 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 
 		if !cwdAllowed {
-			f.logSecurityDeny("working_dir_not_allowed",
-				"command", req.Command,
-				"cwd", req.Options.CWD,
-				"host_id", req.HostID,
-			)
+			f.logSecurityDeny(ctx, "working_dir_not_allowed", "工作目录不在允许列表", req, map[string]interface{}{"cwd": req.Options.CWD})
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("工作目录 '%s' 不在允许列表中", req.Options.CWD),
@@ -294,16 +301,6 @@ type SecurityError struct {
 // Error 实现 error 接口
 func (e *SecurityError) Error() string {
 	return e.Message
-}
-
-// contains 检查字符串切片是否包含指定字符串
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 // isPathPrefix 判断 path 是否位于 prefix 目录内。

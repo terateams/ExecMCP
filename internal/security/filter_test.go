@@ -1,13 +1,16 @@
 package security
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/testutils"
 )
 
 func TestFilter_Check_DenylistExact(t *testing.T) {
@@ -16,7 +19,7 @@ func TestFilter_Check_DenylistExact(t *testing.T) {
 		DenylistExact: []string{"rm", "dd", "mkfs", "shutdown", "reboot"},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试被禁止的命令
 	deniedCommands := []string{"rm", "dd", "mkfs", "shutdown", "reboot"}
@@ -26,7 +29,7 @@ func TestFilter_Check_DenylistExact(t *testing.T) {
 			Args:    []string{},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err == nil {
 			t.Errorf("期望命令 '%s' 被拒绝，但通过了检查", cmd)
 		}
@@ -48,10 +51,34 @@ func TestFilter_Check_DenylistExact(t *testing.T) {
 			Args:    []string{},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err != nil {
 			t.Errorf("期望命令 '%s' 通过检查，但被拒绝: %v", cmd, err)
 		}
+	}
+}
+
+func TestFilter_AuditLogsOnDeny(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		DenylistExact: []string{"rm"},
+	}
+	recorder := testutils.NewRecordingAuditLogger()
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), recorder)
+
+	err := filter.Check(context.Background(), ExecRequest{Command: "rm"})
+	if err == nil {
+		t.Fatal("期望命令被安全策略拒绝，但通过了检查")
+	}
+
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("期望记录 1 条审计事件，但得到 %d", len(events))
+	}
+	if events[0].Rule != "denylist_exact" {
+		t.Errorf("期望记录规则为 denylist_exact，得到 %s", events[0].Rule)
+	}
+	if events[0].Outcome != audit.OutcomeDenied {
+		t.Errorf("期望事件 Outcome=denied，得到 %s", events[0].Outcome)
 	}
 }
 
@@ -67,7 +94,7 @@ func TestFilter_Check_DenylistRegex(t *testing.T) {
 		},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试正则拒绝的命令
 	testCases := []struct {
@@ -86,7 +113,7 @@ func TestFilter_Check_DenylistRegex(t *testing.T) {
 			Args:    tc.args,
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err == nil {
 			t.Errorf("期望 '%s' 被正则拒绝，但通过了检查: %s", tc.desc, tc.command)
 		}
@@ -104,7 +131,7 @@ func TestFilter_Check_ArgDenyRegex(t *testing.T) {
 		AllowlistExact: []string{"rm"}, // 允许 rm 命令但限制参数
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试危险参数
 	testCases := []struct {
@@ -124,7 +151,7 @@ func TestFilter_Check_ArgDenyRegex(t *testing.T) {
 			Args:    tc.args,
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err == nil {
 			t.Errorf("期望 '%s' 被参数拒绝，但通过了检查", tc.desc)
 		}
@@ -136,7 +163,7 @@ func TestFilter_Check_ArgDenyRegex(t *testing.T) {
 		Args:    []string{"file.txt"},
 	}
 
-	err := filter.Check(req)
+	err := filter.Check(context.Background(), req)
 	if err != nil {
 		t.Errorf("期望安全参数通过检查，但被拒绝: %v", err)
 	}
@@ -148,7 +175,7 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 		AllowlistRegex: []string{`^systemctl.*`, `^journalctl.*`},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试允许的命令
 	allowedCommands := []struct {
@@ -168,7 +195,7 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 			Args:    tc.args,
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err != nil {
 			t.Errorf("期望 '%s' 通过白名单检查，但被拒绝: %v", tc.desc, err)
 		}
@@ -182,7 +209,7 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 			Args:    []string{},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err == nil {
 			t.Errorf("期望命令 '%s' 被白名单拒绝，但通过了检查", cmd)
 		}
@@ -196,7 +223,7 @@ func TestFilter_Check_ShellUsage(t *testing.T) {
 		AllowlistExact: []string{"bash", "sh", "ls"},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试不允许使用 shell 的命令
 	testCases := []struct {
@@ -221,7 +248,7 @@ func TestFilter_Check_ShellUsage(t *testing.T) {
 			},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if tc.shouldPass && err != nil {
 			t.Errorf("期望 '%s' 通过检查，但被拒绝: %v", tc.desc, err)
 		}
@@ -278,7 +305,7 @@ func TestFilter_Check_ShellInjection(t *testing.T) {
 		AllowlistExact: []string{"bash"},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试 shell 注入攻击
 	injectionPatterns := []struct {
@@ -303,7 +330,7 @@ func TestFilter_Check_ShellInjection(t *testing.T) {
 			},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err == nil {
 			t.Errorf("期望 shell 注入 '%s' 被拒绝，但通过了检查", pattern.desc)
 		}
@@ -318,7 +345,7 @@ func TestFilter_Check_ShellInjection(t *testing.T) {
 		},
 	}
 
-	err := filter.Check(req)
+	err := filter.Check(context.Background(), req)
 	if err != nil {
 		t.Errorf("期望安全的 shell 参数通过检查，但被拒绝: %v", err)
 	}
@@ -330,7 +357,7 @@ func TestFilter_Check_WorkingDirectory(t *testing.T) {
 		AllowlistExact:  []string{"ls"},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试允许的工作目录
 	allowedDirs := []string{"/tmp", "/var/log", "/home/user", "/home/user/docs"}
@@ -343,7 +370,7 @@ func TestFilter_Check_WorkingDirectory(t *testing.T) {
 			},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err != nil {
 			t.Errorf("期望工作目录 '%s' 通过检查，但被拒绝: %v", dir, err)
 		}
@@ -360,7 +387,7 @@ func TestFilter_Check_WorkingDirectory(t *testing.T) {
 			},
 		}
 
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err == nil {
 			t.Errorf("期望工作目录 '%s' 被拒绝，但通过了检查", dir)
 		}
@@ -369,14 +396,14 @@ func TestFilter_Check_WorkingDirectory(t *testing.T) {
 
 func TestFilter_Check_EmptyCommand(t *testing.T) {
 	cfg := &config.SecurityConfig{}
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	req := ExecRequest{
 		Command: "",
 		Args:    []string{},
 	}
 
-	err := filter.Check(req)
+	err := filter.Check(context.Background(), req)
 	if err == nil {
 		t.Error("期望空命令被拒绝，但通过了检查")
 	}
@@ -393,7 +420,7 @@ func TestFilter_Check_DefaultValues(t *testing.T) {
 		AllowlistExact: []string{"ls"},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	// 测试默认值应该被应用
 	req := ExecRequest{
@@ -404,7 +431,7 @@ func TestFilter_Check_DefaultValues(t *testing.T) {
 		},
 	}
 
-	err := filter.Check(req)
+	err := filter.Check(context.Background(), req)
 	if err != nil {
 		t.Errorf("期望默认配置通过检查，但被拒绝: %v", err)
 	}
@@ -428,7 +455,7 @@ func BenchmarkFilter_Check(b *testing.B) {
 		WorkingDirAllow: []string{"/tmp", "/var/log"},
 	}
 
-	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
 
 	req := ExecRequest{
 		Command: "ls",
@@ -440,7 +467,7 @@ func BenchmarkFilter_Check(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := filter.Check(req)
+		err := filter.Check(context.Background(), req)
 		if err != nil {
 			b.Fatalf("基准测试失败: %v", err)
 		}

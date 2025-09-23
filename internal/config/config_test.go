@@ -136,6 +136,20 @@ logging:
 	if cfg.Logging.Format != "json" {
 		t.Errorf("期望日志格式为 'json'，但得到 '%s'", cfg.Logging.Format)
 	}
+
+	// 验证安全审计日志默认配置
+	if !cfg.Audit.IsEnabled() {
+		t.Error("期望安全审计日志默认启用")
+	}
+	if cfg.Audit.Format != "json" {
+		t.Errorf("期望安全审计日志格式为 'json'，但得到 '%s'", cfg.Audit.Format)
+	}
+	if cfg.Audit.Output != "file" {
+		t.Errorf("期望安全审计日志输出为 'file'，但得到 '%s'", cfg.Audit.Output)
+	}
+	if cfg.Audit.FilePath != "security_audit.log" {
+		t.Errorf("期望安全审计日志文件路径为 'security_audit.log'，但得到 '%s'", cfg.Audit.FilePath)
+	}
 }
 
 func TestLoad_ConfigDefaults(t *testing.T) {
@@ -184,6 +198,12 @@ ssh_hosts:
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("期望默认日志级别为 'info'，但得到 '%s'", cfg.Logging.Level)
+	}
+	if !cfg.Audit.IsEnabled() {
+		t.Error("期望默认启用安全审计日志")
+	}
+	if cfg.Audit.FilePath != "security_audit.log" {
+		t.Errorf("期望默认安全审计日志文件路径为 'security_audit.log'，但得到 '%s'", cfg.Audit.FilePath)
 	}
 }
 

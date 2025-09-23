@@ -10,6 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/execsvc"
 	"github.com/terateams/ExecMCP/internal/logging"
@@ -20,6 +21,7 @@ import (
 type MCPServer struct {
 	config      *config.Config
 	logger      logging.Logger
+	audit       audit.Logger
 	server      *server.MCPServer
 	sseServer   *server.SSEServer
 	execService *execsvc.Service
@@ -27,12 +29,15 @@ type MCPServer struct {
 }
 
 // NewMCPServer 创建新的 MCP 服务器
-func NewMCPServer(cfg *config.Config, logger logging.Logger) (*MCPServer, error) {
+func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.Logger) (*MCPServer, error) {
+	if auditLogger == nil {
+		auditLogger = audit.NewNoopLogger()
+	}
 	// 创建 SSH 管理器
 	sshManager := ssh.NewManager(cfg, logger)
 
 	// 创建执行服务
-	execService, err := execsvc.NewService(cfg, logger)
+	execService, err := execsvc.NewService(cfg, logger, auditLogger)
 	if err != nil {
 		return nil, fmt.Errorf("创建执行服务失败: %w", err)
 	}
@@ -47,6 +52,7 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger) (*MCPServer, error)
 	mcp := &MCPServer{
 		config:      cfg,
 		logger:      logger,
+		audit:       auditLogger,
 		server:      mcpServer,
 		execService: execService,
 		sshManager:  sshManager,
@@ -201,6 +207,7 @@ func (m *MCPServer) Stop() error {
 
 // 处理工具调用
 func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx = m.withAuditContext(ctx, "exec_command", req)
 	if err := m.checkAuth(ctx, req); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -208,6 +215,21 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 	command := mcp.ParseString(req, "command", "")
 
 	if hostID == "" || command == "" {
+		missing := []string{}
+		if hostID == "" {
+			missing = append(missing, "host_id")
+		}
+		if command == "" {
+			missing = append(missing, "command")
+		}
+		m.logAudit(ctx, audit.Event{
+			Category: "exec_command",
+			Type:     "invalid_request",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityLow,
+			Reason:   "missing required fields",
+			Metadata: map[string]interface{}{"missing": missing},
+		})
 		return mcp.NewToolResultError("host_id and command are required"), nil
 	}
 
@@ -261,6 +283,7 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 }
 
 func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx = m.withAuditContext(ctx, "exec_script", req)
 	if err := m.checkAuth(ctx, req); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -268,6 +291,21 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 	scriptName := mcp.ParseString(req, "script_name", "")
 
 	if hostID == "" || scriptName == "" {
+		missing := []string{}
+		if hostID == "" {
+			missing = append(missing, "host_id")
+		}
+		if scriptName == "" {
+			missing = append(missing, "script_name")
+		}
+		m.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "invalid_request",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityLow,
+			Reason:   "missing required fields",
+			Metadata: map[string]interface{}{"missing": missing},
+		})
 		return mcp.NewToolResultError("host_id and script_name are required"), nil
 	}
 
@@ -309,6 +347,7 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 }
 
 func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx = m.withAuditContext(ctx, "list_commands", req)
 	if err := m.checkAuth(ctx, req); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -372,12 +411,20 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 }
 
 func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx = m.withAuditContext(ctx, "test_connection", req)
 	if err := m.checkAuth(ctx, req); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	hostID := mcp.ParseString(req, "host_id", "")
 
 	if hostID == "" {
+		m.logAudit(ctx, audit.Event{
+			Category: "test_connection",
+			Type:     "invalid_request",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityLow,
+			Reason:   "missing host_id",
+		})
 		return mcp.NewToolResultError("host_id is required"), nil
 	}
 
@@ -386,6 +433,14 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 	err := m.sshManager.HealthCheck(hostID)
 	if err != nil {
 		m.logger.Error("连接测试失败", "host_id", hostID, "error", err)
+		m.logAudit(ctx, audit.Event{
+			Category: "test_connection",
+			Type:     "connection_failed",
+			Outcome:  audit.OutcomeError,
+			Severity: audit.SeverityMedium,
+			Reason:   err.Error(),
+			Metadata: map[string]interface{}{"host_id": hostID},
+		})
 		return mcp.NewToolResultError(fmt.Sprintf("Connection test failed: %v", err)), nil
 	}
 
@@ -399,6 +454,13 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 	}
 
 	if hostConfig == nil {
+		m.logAudit(ctx, audit.Event{
+			Category: "test_connection",
+			Type:     "unknown_host",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   fmt.Sprintf("host not configured: %s", hostID),
+		})
 		return mcp.NewToolResultError(fmt.Sprintf("Host configuration not found: %s", hostID)), nil
 	}
 
@@ -415,6 +477,7 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 }
 
 func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx = m.withAuditContext(ctx, "list_hosts", req)
 	if err := m.checkAuth(ctx, req); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -473,10 +536,88 @@ func (m *MCPServer) checkAuth(ctx context.Context, req mcp.CallToolRequest) erro
 	}
 
 	if provided == "" {
+		m.logAudit(ctx, audit.Event{
+			Category: "auth",
+			Type:     "auth_failed",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityHigh,
+			Reason:   "missing auth token",
+			Metadata: map[string]interface{}{"has_token": false},
+		})
 		return fmt.Errorf("unauthorized: missing auth token")
 	}
 	if provided != expected {
+		m.logAudit(ctx, audit.Event{
+			Category: "auth",
+			Type:     "auth_failed",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityHigh,
+			Reason:   "invalid auth token",
+			Metadata: map[string]interface{}{"has_token": true},
+		})
 		return fmt.Errorf("unauthorized: invalid auth token")
 	}
 	return nil
+}
+
+func (m *MCPServer) withAuditContext(ctx context.Context, toolName string, req mcp.CallToolRequest) context.Context {
+	ctx, reqID := audit.EnsureContext(ctx)
+	fields := audit.ContextFields{
+		RequestID: reqID,
+		Actor:     extractActorFromRequest(req),
+		Tool:      toolName,
+		SourceIP:  extractSourceIPFromRequest(req),
+	}
+	return audit.WithContext(ctx, fields)
+}
+
+func (m *MCPServer) logAudit(ctx context.Context, event audit.Event) {
+	if m.audit == nil || !m.audit.Enabled() {
+		return
+	}
+	m.audit.LogEvent(ctx, event)
+}
+
+func extractActorFromRequest(req mcp.CallToolRequest) string {
+	if meta := req.Params.Meta; meta != nil && meta.AdditionalFields != nil {
+		for _, key := range []string{"actor", "user", "username", "client", "source"} {
+			if value, ok := meta.AdditionalFields[key]; ok {
+				if str, ok := value.(string); ok {
+					if trimmed := strings.TrimSpace(str); trimmed != "" {
+						return trimmed
+					}
+				}
+			}
+		}
+	}
+	if req.Header != nil {
+		keys := []string{"X-Actor", "X-Client-Id", "X-Requester", "User-Agent"}
+		for _, key := range keys {
+			if value := strings.TrimSpace(req.Header.Get(key)); value != "" {
+				return value
+			}
+		}
+	}
+	return "unknown"
+}
+
+func extractSourceIPFromRequest(req mcp.CallToolRequest) string {
+	if req.Header == nil {
+		return ""
+	}
+	if forwarded := strings.TrimSpace(req.Header.Get("X-Forwarded-For")); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		if len(parts) > 0 {
+			if ip := strings.TrimSpace(parts[0]); ip != "" {
+				return ip
+			}
+		}
+	}
+	keys := []string{"X-Real-IP", "X-Client-IP"}
+	for _, key := range keys {
+		if value := strings.TrimSpace(req.Header.Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

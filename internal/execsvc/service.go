@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/common"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
@@ -24,6 +25,7 @@ type Service struct {
 	logger     logging.Logger
 	sshManager ssh.Manager
 	filter     *security.Filter
+	audit      audit.Logger
 }
 
 // ExecResult 执行结果
@@ -62,12 +64,16 @@ type ScriptRequest struct {
 }
 
 // NewService 创建新的命令执行服务
-func NewService(cfg *config.Config, logger logging.Logger) (*Service, error) {
+func NewService(cfg *config.Config, logger logging.Logger, auditLogger audit.Logger) (*Service, error) {
+	if auditLogger == nil {
+		auditLogger = audit.NewNoopLogger()
+	}
 	service := &Service{
 		config:     cfg,
 		logger:     logger,
 		sshManager: ssh.NewManager(cfg, logger),
-		filter:     security.NewFilter(&cfg.Security, logger),
+		filter:     security.NewFilter(&cfg.Security, logger, auditLogger),
+		audit:      auditLogger,
 	}
 
 	logger.Info("命令执行服务初始化完成")
@@ -77,6 +83,7 @@ func NewService(cfg *config.Config, logger logging.Logger) (*Service, error) {
 
 // ExecuteCommand 执行命令
 func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecResult, error) {
+	ctx, _ = audit.EnsureContext(ctx)
 	startTime := time.Now()
 
 	// 记录执行上下文，便于审计与排查问题
@@ -85,6 +92,22 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		"command", req.Command,
 		"args", req.Args,
 		"use_shell", req.Options.UseShell)
+
+	s.logAudit(ctx, audit.Event{
+		Category: "exec_command",
+		Type:     "command_requested",
+		HostID:   req.HostID,
+		Target:   req.Command,
+		Outcome:  audit.OutcomeUnknown,
+		Severity: audit.SeverityInfo,
+		Metadata: map[string]interface{}{
+			"args":        append([]string(nil), req.Args...),
+			"use_shell":   req.Options.UseShell,
+			"cwd":         req.Options.CWD,
+			"timeout_sec": req.Options.TimeoutSec,
+			"stream":      req.Options.Stream,
+		},
+	})
 
 	// 1. 安全过滤：所有入口统一走安全策略，确保命令、参数和工作目录符合配置
 	securityReq := security.ExecRequest{
@@ -101,7 +124,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		},
 	}
 
-	if err := s.filter.Check(securityReq); err != nil {
+	if err := s.filter.Check(ctx, securityReq); err != nil {
 		s.logger.Error("命令被安全过滤拒绝",
 			"host_id", req.HostID,
 			"command", req.Command,
@@ -115,6 +138,15 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		s.logger.Error("获取 SSH 会话失败",
 			"host_id", req.HostID,
 			"error", err)
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_command",
+			Type:     "session_error",
+			HostID:   req.HostID,
+			Target:   req.Command,
+			Outcome:  audit.OutcomeError,
+			Severity: audit.SeverityHigh,
+			Reason:   err.Error(),
+		})
 		return nil, common.SSHError("获取会话", req.HostID, err)
 	}
 	defer s.sshManager.ReleaseSession(req.HostID, session)
@@ -126,6 +158,18 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"host_id", req.HostID,
 			"command", req.Command,
 			"error", err)
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_command",
+			Type:     "execution_error",
+			HostID:   req.HostID,
+			Target:   req.Command,
+			Outcome:  audit.OutcomeError,
+			Severity: audit.SeverityHigh,
+			Reason:   err.Error(),
+			Metadata: map[string]interface{}{
+				"args": append([]string(nil), req.Args...),
+			},
+		})
 		return nil, common.SSHError("命令执行", req.HostID, err)
 	}
 
@@ -156,11 +200,27 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		"duration_ms", result.DurationMs,
 		"truncated", result.Truncated)
 
+	s.logAudit(ctx, audit.Event{
+		Category: "exec_command",
+		Type:     "command_completed",
+		HostID:   req.HostID,
+		Target:   req.Command,
+		Outcome:  audit.OutcomeSuccess,
+		Severity: audit.SeverityInfo,
+		Metadata: map[string]interface{}{
+			"duration_ms": result.DurationMs,
+			"exit_code":   result.ExitCode,
+			"truncated":   result.Truncated,
+			"output_size": len(result.Stdout),
+		},
+	})
+
 	return result, nil
 }
 
 // ExecuteScript 执行脚本
 func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecResult, error) {
+	ctx, _ = audit.EnsureContext(ctx)
 	startTime := time.Now()
 
 	// 脚本执行同样先记录关键信息，便于追踪具体业务脚本
@@ -169,9 +229,36 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 		"script_name", req.ScriptName,
 		"parameters", req.Parameters)
 
+	var paramKeys []string
+	for key := range req.Parameters {
+		paramKeys = append(paramKeys, key)
+	}
+
+	s.logAudit(ctx, audit.Event{
+		Category: "exec_script",
+		Type:     "script_requested",
+		HostID:   req.HostID,
+		Target:   req.ScriptName,
+		Outcome:  audit.OutcomeUnknown,
+		Severity: audit.SeverityInfo,
+		Metadata: map[string]interface{}{
+			"parameter_keys": paramKeys,
+			"timeout_sec":    req.Options.TimeoutSec,
+		},
+	})
+
 	// 查找脚本配置：脚本必须在配置文件中明确定义
 	scriptConfig := s.findScriptConfig(req.ScriptName)
 	if scriptConfig == nil {
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "script_missing",
+			HostID:   req.HostID,
+			Target:   req.ScriptName,
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   "script definition not found",
+		})
 		return nil, fmt.Errorf("脚本 '%s' 不存在", req.ScriptName)
 	}
 
@@ -181,11 +268,29 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 	// 使用安全模板引擎渲染脚本，自动处理 shell 注入风险
 	command, err := s.renderTemplate(scriptConfig.Template, mergedParams, scriptConfig.UseShell)
 	if err != nil {
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "render_error",
+			HostID:   req.HostID,
+			Target:   req.ScriptName,
+			Outcome:  audit.OutcomeError,
+			Severity: audit.SeverityHigh,
+			Reason:   err.Error(),
+		})
 		return nil, common.WrapError("模板渲染失败", err)
 	}
 
 	// 预留校验逻辑：未来可在此扩展类型、范围等校验
 	if err := s.validateParameters(scriptConfig, mergedParams); err != nil {
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "validation_failed",
+			HostID:   req.HostID,
+			Target:   req.ScriptName,
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   err.Error(),
+		})
 		return nil, common.ValidationError("脚本参数", err.Error())
 	}
 
@@ -232,16 +337,47 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 	// 执行命令
 	result, err := s.ExecuteCommand(ctx, execReq)
 	if err != nil {
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "execution_error",
+			HostID:   req.HostID,
+			Target:   req.ScriptName,
+			Outcome:  audit.OutcomeError,
+			Severity: audit.SeverityHigh,
+			Reason:   err.Error(),
+		})
 		return nil, err
 	}
+
+	durationMs := time.Since(startTime).Milliseconds()
 
 	s.logger.Info("脚本执行完成",
 		"host_id", req.HostID,
 		"script_name", req.ScriptName,
 		"exit_code", result.ExitCode,
-		"duration_ms", time.Since(startTime).Milliseconds())
+		"duration_ms", durationMs)
+
+	s.logAudit(ctx, audit.Event{
+		Category: "exec_script",
+		Type:     "script_completed",
+		HostID:   req.HostID,
+		Target:   req.ScriptName,
+		Outcome:  audit.OutcomeSuccess,
+		Severity: audit.SeverityInfo,
+		Metadata: map[string]interface{}{
+			"duration_ms": durationMs,
+			"exit_code":   result.ExitCode,
+		},
+	})
 
 	return result, nil
+}
+
+func (s *Service) logAudit(ctx context.Context, event audit.Event) {
+	if s.audit == nil || !s.audit.Enabled() {
+		return
+	}
+	s.audit.LogEvent(ctx, event)
 }
 
 // findScriptConfig 查找脚本配置

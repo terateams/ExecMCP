@@ -14,11 +14,12 @@ import (
 // Config 主配置结构体，包含 ExecMCP 服务器的所有配置项
 // 这是整个配置系统的根结构，通过 YAML 文件进行配置
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`    // 服务器基本配置
-	SSHHosts []SSHHost      `yaml:"ssh_hosts"` // SSH 主机连接配置列表
-	Security SecurityConfig `yaml:"security"`  // 安全过滤和访问控制配置
-	Scripts  []ScriptConfig `yaml:"scripts"`   // 预定义脚本配置
-	Logging  LoggingConfig  `yaml:"logging"`   // 日志记录配置
+	Server   ServerConfig       `yaml:"server"`        // 服务器基本配置
+	SSHHosts []SSHHost          `yaml:"ssh_hosts"`     // SSH 主机连接配置列表
+	Security SecurityConfig     `yaml:"security"`      // 安全过滤和访问控制配置
+	Scripts  []ScriptConfig     `yaml:"scripts"`       // 预定义脚本配置
+	Logging  LoggingConfig      `yaml:"logging"`       // 日志记录配置
+	Audit    AuditLoggingConfig `yaml:"audit_logging"` // 安全审计日志配置
 }
 
 // ServerConfig 服务器基本配置
@@ -99,6 +100,31 @@ type LoggingConfig struct {
 	MaxSize    string `yaml:"max_size"`    // 单个日志文件最大大小（如 100MB, 1GB）
 	MaxBackups int    `yaml:"max_backups"` // 保留的旧日志文件数量
 	MaxAge     int    `yaml:"max_age"`     // 日志文件保留天数
+}
+
+// AuditLoggingConfig 安全审计日志配置
+// 控制安全事件日志的输出位置和格式
+type AuditLoggingConfig struct {
+	Enabled  *bool  `yaml:"enabled"`   // 是否启用安全审计日志
+	Format   string `yaml:"format"`    // 日志格式：json 或 text
+	Output   string `yaml:"output"`    // 输出目标：stdout, stderr, file
+	FilePath string `yaml:"file_path"` // 当 output 为 file 时的日志文件路径
+}
+
+// IsEnabled 返回是否启用安全审计日志，默认启用。
+func (a *AuditLoggingConfig) IsEnabled() bool {
+	if a == nil || a.Enabled == nil {
+		return true
+	}
+	return *a.Enabled
+}
+
+// SetEnabled 显式设置安全审计日志开关。
+func (a *AuditLoggingConfig) SetEnabled(v bool) {
+	if a == nil {
+		return
+	}
+	a.Enabled = &v
 }
 
 // Load 从指定路径加载配置文件并完成所有配置处理步骤
@@ -184,6 +210,17 @@ func setDefaults(config *Config) {
 	if config.Logging.Output == "" {
 		config.Logging.Output = "stdout" // 默认输出到标准输出
 	}
+
+	// 安全审计日志默认值
+	if config.Audit.Format == "" {
+		config.Audit.Format = "json"
+	}
+	if config.Audit.Output == "" {
+		config.Audit.Output = "file"
+	}
+	if strings.EqualFold(config.Audit.Output, "file") && config.Audit.FilePath == "" {
+		config.Audit.FilePath = "security_audit.log"
+	}
 }
 
 // validate 验证配置的完整性和正确性
@@ -242,6 +279,13 @@ func expandPaths(config *Config) {
 		host.KnownHosts = expandPath(host.KnownHosts)
 		host.PasswordFile = expandPath(host.PasswordFile)
 	}
+
+	if strings.EqualFold(config.Logging.Output, "file") {
+		config.Logging.FilePath = expandPath(config.Logging.FilePath)
+	}
+	if strings.EqualFold(config.Audit.Output, "file") {
+		config.Audit.FilePath = expandPath(config.Audit.FilePath)
+	}
 }
 
 // expandPath 展开单个路径中的 ~ 为用户主目录
@@ -263,6 +307,9 @@ func applyEnvOverrides(config *Config) {
 
 	// 日志配置环境变量覆盖
 	applyLoggingEnvOverrides(config)
+
+	// 安全审计日志环境变量覆盖
+	applyAuditLoggingEnvOverrides(config)
 
 	// 动态添加SSH主机配置
 	applyDynamicSSHHost(config)
@@ -300,6 +347,14 @@ func applyLoggingEnvOverrides(config *Config) {
 	setStringFromEnv(&config.Logging.MaxSize, EnvLoggingMaxSize)
 	setIntFromEnv(&config.Logging.MaxBackups, EnvLoggingMaxBackups)
 	setIntFromEnv(&config.Logging.MaxAge, EnvLoggingMaxAge)
+}
+
+// applyAuditLoggingEnvOverrides 应用安全审计日志相关环境变量覆盖
+func applyAuditLoggingEnvOverrides(config *Config) {
+	setBoolPointerFromEnv(&config.Audit.Enabled, EnvAuditLoggingEnabled)
+	setStringFromEnv(&config.Audit.Format, EnvAuditLoggingFormat)
+	setStringFromEnv(&config.Audit.Output, EnvAuditLoggingOutput)
+	setStringFromEnv(&config.Audit.FilePath, EnvAuditLoggingFilePath)
 }
 
 // applyDynamicSSHHost 通过环境变量动态添加SSH主机配置
@@ -376,6 +431,20 @@ func setInt64FromEnv(target *int64, envKey string) {
 // setBoolFromEnv 从环境变量设置布尔值
 func setBoolFromEnv(target *bool, envKey string) {
 	*target = common.GetEnvBool(envKey, false)
+}
+
+// setBoolPointerFromEnv 从环境变量设置布尔指针值
+func setBoolPointerFromEnv(target **bool, envKey string) {
+	if target == nil {
+		return
+	}
+	if value, exists := os.LookupEnv(envKey); exists {
+		val := strings.EqualFold(value, "true") || value == "1"
+		if *target == nil {
+			*target = new(bool)
+		}
+		**target = val
+	}
 }
 
 // appendStringSliceFromEnv 从环境变量追加字符串切片
