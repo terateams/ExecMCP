@@ -12,7 +12,15 @@ import (
 
 // Filter 安全过滤器
 type Filter struct {
-	config *config.SecurityConfig
+	config         *config.SecurityConfig
+	denylistRegex  []compiledPattern
+	argDenyRegex   []compiledPattern
+	allowlistRegex []compiledPattern
+}
+
+type compiledPattern struct {
+	pattern string
+	re      *regexp.Regexp
 }
 
 // ExecRequest 执行请求
@@ -36,7 +44,10 @@ type ExecOptions struct {
 // NewFilter 创建新的安全过滤器
 func NewFilter(cfg *config.SecurityConfig) *Filter {
 	return &Filter{
-		config: cfg,
+		config:         cfg,
+		denylistRegex:  compilePatterns(cfg.DenylistRegex),
+		argDenyRegex:   compilePatterns(cfg.ArgDenyRegex),
+		allowlistRegex: compilePatterns(cfg.AllowlistRegex),
 	}
 }
 
@@ -65,18 +76,14 @@ func (f *Filter) Check(req ExecRequest) error {
 	}
 
 	// 3. 检查正则黑名单
-	for _, pattern := range f.config.DenylistRegex {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			continue // 跳过无效的正则表达式
-		}
-		if re.MatchString(req.Command) {
+	for _, pattern := range f.denylistRegex {
+		if pattern.re.MatchString(req.Command) {
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
-				Message: fmt.Sprintf("命令 '%s' 匹配禁止模式 '%s'", req.Command, pattern),
+				Message: fmt.Sprintf("命令 '%s' 匹配禁止模式 '%s'", req.Command, pattern.pattern),
 				Details: map[string]interface{}{
 					"rule":    "denylist_regex",
-					"pattern": pattern,
+					"pattern": pattern.pattern,
 					"command": req.Command,
 				},
 			}
@@ -85,18 +92,14 @@ func (f *Filter) Check(req ExecRequest) error {
 
 	// 4. 检查参数黑名单
 	for _, arg := range req.Args {
-		for _, pattern := range f.config.ArgDenyRegex {
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				continue
-			}
-			if re.MatchString(arg) {
+		for _, pattern := range f.argDenyRegex {
+			if pattern.re.MatchString(arg) {
 				return &SecurityError{
 					Code:    "SECURITY_DENY",
-					Message: fmt.Sprintf("参数 '%s' 匹配禁止模式 '%s'", arg, pattern),
+					Message: fmt.Sprintf("参数 '%s' 匹配禁止模式 '%s'", arg, pattern.pattern),
 					Details: map[string]interface{}{
 						"rule":     "arg_deny_regex",
-						"pattern":  pattern,
+						"pattern":  pattern.pattern,
 						"argument": arg,
 					},
 				}
@@ -126,8 +129,8 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 	}
 
-    // 如果启用了 shell，进行额外检查：只有明确允许的命令可以进入 shell，
-    // 同时强制拒绝常见的命令拼接与重定向符号，降低注入风险。
+	// 如果启用了 shell，进行额外检查：只有明确允许的命令可以进入 shell，
+	// 同时强制拒绝常见的命令拼接与重定向符号，降低注入风险。
 	if req.Options.UseShell {
 		// 检查命令是否在允许使用 shell 的列表中
 		allowed := false
@@ -185,12 +188,8 @@ func (f *Filter) Check(req ExecRequest) error {
 
 		// 检查正则白名单
 		if !allowed {
-			for _, pattern := range f.config.AllowlistRegex {
-				re, err := regexp.Compile(pattern)
-				if err != nil {
-					continue
-				}
-				if re.MatchString(req.Command) {
+			for _, pattern := range f.allowlistRegex {
+				if pattern.re.MatchString(req.Command) {
 					allowed = true
 					break
 				}
@@ -336,4 +335,16 @@ func pathsEqual(a, b string) bool {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
+}
+
+func compilePatterns(patterns []string) []compiledPattern {
+	compiled := make([]compiledPattern, 0, len(patterns))
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			continue
+		}
+		compiled = append(compiled, compiledPattern{pattern: pattern, re: re})
+	}
+	return compiled
 }

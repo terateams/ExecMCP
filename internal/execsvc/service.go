@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -314,13 +317,144 @@ func (s *Service) applyDefaultValues(scriptConfig *config.ScriptConfig, params m
 
 // validateParameters 验证参数
 func (s *Service) validateParameters(scriptConfig *config.ScriptConfig, params map[string]interface{}) error {
-	// TODO: 实现参数验证
-	// 1. 检查必需参数
-	// 2. 验证参数类型
-	// 3. 应用正则验证
-	// 4. 设置默认值
+	for _, def := range scriptConfig.Parameters {
+		value, exists := params[def.Name]
+		if !exists {
+			if def.Required {
+				return fmt.Errorf("缺少必需参数 '%s'", def.Name)
+			}
+			continue
+		}
+
+		var coerced interface{}
+		switch strings.ToLower(def.Type) {
+		case "string":
+			str, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("参数 '%s' 类型错误，期望 string", def.Name)
+			}
+			coerced = str
+		case "integer":
+			parsed, err := coerceToInt(value)
+			if err != nil {
+				return fmt.Errorf("参数 '%s' 类型错误，%v", def.Name, err)
+			}
+			coerced = parsed
+		case "float":
+			parsed, err := coerceToFloat(value)
+			if err != nil {
+				return fmt.Errorf("参数 '%s' 类型错误，%v", def.Name, err)
+			}
+			coerced = parsed
+		case "boolean", "bool":
+			parsed, err := coerceToBool(value)
+			if err != nil {
+				return fmt.Errorf("参数 '%s' 类型错误，%v", def.Name, err)
+			}
+			coerced = parsed
+		default:
+			return fmt.Errorf("参数 '%s' 使用了不支持的类型 '%s'", def.Name, def.Type)
+		}
+
+		if def.Validation != "" {
+			strVal := fmt.Sprintf("%v", coerced)
+			re, err := regexp.Compile(def.Validation)
+			if err != nil {
+				return fmt.Errorf("参数 '%s' 的验证规则无效: %v", def.Name, err)
+			}
+			if !re.MatchString(strVal) {
+				return fmt.Errorf("参数 '%s' 未通过验证规则", def.Name)
+			}
+		}
+
+		params[def.Name] = coerced
+	}
 
 	return nil
+}
+
+func coerceToInt(value interface{}) (int64, error) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case float32:
+		return coerceToInt(float64(v))
+	case float64:
+		if math.Mod(v, 1) != 0 {
+			return 0, fmt.Errorf("值 %v 不是整数", v)
+		}
+		return int64(v), nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, fmt.Errorf("值为空")
+		}
+		n, err := strconv.ParseInt(trimmed, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("无法解析整数: %v", err)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("无法转换为整数")
+	}
+}
+
+func coerceToFloat(value interface{}) (float64, error) {
+	switch v := value.(type) {
+	case float32:
+		return float64(v), nil
+	case float64:
+		return v, nil
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, fmt.Errorf("值为空")
+		}
+		n, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil {
+			return 0, fmt.Errorf("无法解析浮点数: %v", err)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("无法转换为浮点数")
+	}
+}
+
+func coerceToBool(value interface{}) (bool, error) {
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case string:
+		trimmed := strings.TrimSpace(strings.ToLower(v))
+		if trimmed == "" {
+			return false, fmt.Errorf("值为空")
+		}
+		parsed, err := strconv.ParseBool(trimmed)
+		if err != nil {
+			return false, fmt.Errorf("无法解析布尔值: %v", err)
+		}
+		return parsed, nil
+	default:
+		return false, fmt.Errorf("无法转换为布尔值")
+	}
 }
 
 // shellQuote 将任意参数包裹成安全的单引号表达式，并对内部单引号进行 POSIX 兼容的转义，

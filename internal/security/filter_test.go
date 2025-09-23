@@ -57,7 +57,8 @@ func TestFilter_Check_DenylistExact(t *testing.T) {
 func TestFilter_Check_DenylistRegex(t *testing.T) {
 	cfg := &config.SecurityConfig{
 		DenylistRegex: []string{
-			`^rm\..*`, // rm 命令的各种变体
+			`^rm\..*`,  // rm 命令的各种变体
+			`[invalid`, // 无效正则应被忽略
 		},
 		ArgDenyRegex: []string{
 			`.*;.*`,  // 命令串接
