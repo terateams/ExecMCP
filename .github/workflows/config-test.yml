@@ -1,0 +1,69 @@
+name: Configuration Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  config-test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+        cache: true
+
+    - name: Install dependencies
+      run: go mod tidy
+
+    - name: Test configuration loading
+      run: |
+        # Create a minimal test configuration
+        cat > config.test.yaml << EOF
+        server:
+          bind_addr: "127.0.0.1:7458"
+          log_level: "debug"
+
+        ssh_hosts:
+          - id: "test-host"
+            addr: "localhost:22"
+            user: "testuser"
+            auth_method: "password"
+            password: "testpass"
+            max_sessions: 2
+
+        security:
+          default_shell: false
+          allow_shell_for: []
+          denylist_exact: ["rm", "dd", "mkfs", "shutdown", "reboot"]
+          allowlist_exact: ["ls", "cat", "echo", "whoami", "pwd"]
+          working_dir_allow: ["/tmp", "/home"]
+          max_output_bytes: 1048576
+          rate_limit_per_min: 60
+
+        logging:
+          level: "debug"
+          format: "json"
+          output: "stdout"
+
+        scripts:
+          - name: "test-script"
+            description: "测试脚本"
+            template: "echo 'Hello, {{.name}}!'"
+            parameters:
+              - name: "name"
+                type: "string"
+                required: true
+                default: "world"
+            timeout_sec: 10
+            use_shell: true
+        EOF
+
+        # Test if configuration can be loaded
+        go run main.go --config config.test.yaml --help

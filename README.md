@@ -1,5 +1,12 @@
 # ExecMCP
 
+[![Test](https://github.com/terateams/ExecMCP/actions/workflows/test.yml/badge.svg)](https://github.com/terateams/ExecMCP/actions/workflows/test.yml)
+[![Docker Release](https://github.com/terateams/ExecMCP/actions/workflows/docker-release.yml/badge.svg)](https://github.com/terateams/ExecMCP/actions/workflows/docker-release.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/terateams/ExecMCP)](https://goreportcard.com/report/github.com/terateams/ExecMCP)
+[![Coverage](https://codecov.io/gh/terateams/ExecMCP/branch/main/graph/badge.svg)](https://codecov.io/gh/terateams/ExecMCP)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker Pulls](https://img.shields.io/docker/pulls/terateams/execmcp)](https://hub.docker.com/r/terateams/execmcp)
+
 安全优先的 Go 语言 MCP (Model Context Protocol) 服务器，通过 SSH 为 Linux 主机提供安全的远程命令执行服务。
 
 ## ✨ 特性
