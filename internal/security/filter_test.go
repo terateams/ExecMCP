@@ -1,9 +1,12 @@
 package security
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
-	"github.com/your-username/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/config"
 )
 
 func TestFilter_Check_DenylistExact(t *testing.T) {
@@ -223,6 +226,47 @@ func TestFilter_Check_ShellUsage(t *testing.T) {
 		if !tc.shouldPass && err == nil {
 			t.Errorf("期望 '%s' 被拒绝，但通过了检查", tc.desc)
 		}
+	}
+}
+
+func TestIsPathPrefix(t *testing.T) {
+	baseDir := t.TempDir()
+	childDir := filepath.Join(baseDir, "child", "nested")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("创建测试目录失败: %v", err)
+	}
+
+	if !isPathPrefix(childDir, baseDir) {
+		t.Fatalf("期望 %q 被识别为 %q 的子目录", childDir, baseDir)
+	}
+
+	// 相对路径解析到允许目录内
+	if !isPathPrefix("child", baseDir) {
+		t.Fatalf("期望相对路径 'child' 被允许目录 %q 接受", baseDir)
+	}
+
+	// 含有 .. 的路径应被拒绝
+	if isPathPrefix("../outside", baseDir) {
+		t.Fatal("包含 .. 的相对路径不应通过前缀检查")
+	}
+
+	outsideDir := filepath.Join(baseDir, "..", "outside")
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("创建外部目录失败: %v", err)
+	}
+	if isPathPrefix(outsideDir, baseDir) {
+		t.Fatalf("目录 %q 不应被视为 %q 的子目录", outsideDir, baseDir)
+	}
+
+	symlinkPath := filepath.Join(baseDir, "link")
+	if err := os.Symlink(outsideDir, symlinkPath); err == nil {
+		if isPathPrefix(symlinkPath, baseDir) {
+			t.Fatal("指向外部目录的符号链接不应通过前缀检查")
+		}
+		_ = os.Remove(symlinkPath)
+	} else if runtime.GOOS != "windows" {
+		// 在非 Windows 平台上，创建符号链接失败通常意味着测试环境受限
+		t.Logf("创建符号链接失败，跳过符号链接相关断言: %v", err)
 	}
 }
 

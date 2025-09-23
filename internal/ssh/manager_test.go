@@ -1,13 +1,16 @@
 package ssh
 
 import (
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
 )
+
+var testKnownHostsPath = filepath.Join("..", "..", "testdata", ".ssh", "known_hosts_test")
 
 func TestNewManager(t *testing.T) {
 	cfg := &config.Config{
@@ -18,7 +21,7 @@ func TestNewManager(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -59,7 +62,7 @@ func TestRealManager_GetSession(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -115,7 +118,7 @@ func TestRealManager_ReleaseSession(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -159,7 +162,7 @@ func TestRealManager_Close(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -195,6 +198,40 @@ func TestRealManager_Close(t *testing.T) {
 	}
 }
 
+func TestRealManager_GetHostKeyCallback_RequiresKnownHosts(t *testing.T) {
+	realLogger := logging.NewLogger(config.LoggingConfig{
+		Level:  "info",
+		Format: "text",
+		Output: "stdout",
+	})
+
+	manager := &RealManager{logger: realLogger}
+
+	_, err := manager.getHostKeyCallback(config.SSHHost{ID: "missing-known-hosts"})
+	if err == nil {
+		t.Fatal("未配置 known_hosts 时应返回错误")
+	}
+}
+
+func TestRealManager_GetHostKeyCallback_WithValidKnownHosts(t *testing.T) {
+	realLogger := logging.NewLogger(config.LoggingConfig{
+		Level:  "info",
+		Format: "text",
+		Output: "stdout",
+	})
+
+	manager := &RealManager{logger: realLogger}
+
+	callback, err := manager.getHostKeyCallback(config.SSHHost{ID: "test-host", KnownHosts: testKnownHostsPath})
+	if err != nil {
+		t.Fatalf("期望加载 known_hosts 成功，但得到错误: %v", err)
+	}
+
+	if callback == nil {
+		t.Fatal("期望返回 host key 回调，但得到 nil")
+	}
+}
+
 func TestRealManager_HealthCheck(t *testing.T) {
 	cfg := &config.Config{
 		SSHHosts: []config.SSHHost{
@@ -204,7 +241,7 @@ func TestRealManager_HealthCheck(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -260,7 +297,7 @@ func TestRealManager_ConcurrentAccess(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    10,
 			},
 		},

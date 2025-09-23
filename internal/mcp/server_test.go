@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
 )
 
 func TestNewMCPServer(t *testing.T) {
@@ -193,8 +193,8 @@ func TestMCPServer_ToolsList(t *testing.T) {
 
 	// 检查工具是否正确注册
 	tools := server.server.ListTools()
-	if len(tools) != 4 {
-		t.Errorf("期望有 4 个工具，但得到 %d", len(tools))
+	if len(tools) != 5 {
+		t.Errorf("期望有 5 个工具，但得到 %d", len(tools))
 	}
 
 	// 检查工具名称
@@ -203,6 +203,7 @@ func TestMCPServer_ToolsList(t *testing.T) {
 		"exec_script":     false,
 		"list_commands":   false,
 		"test_connection": false,
+		"list_hosts":      false,
 	}
 
 	for name := range tools {
@@ -259,8 +260,8 @@ func TestMCPServer_MissingSSHHosts(t *testing.T) {
 
 	// 应该仍然能注册工具
 	tools := server.server.ListTools()
-	if len(tools) != 4 {
-		t.Errorf("期望有 4 个工具，但得到 %d", len(tools))
+	if len(tools) != 5 {
+		t.Errorf("期望有 5 个工具，但得到 %d", len(tools))
 	}
 }
 

@@ -45,7 +45,11 @@
       "Bash(MCP_SCRIPT_NAME=\"directory-list\" MCP_SCRIPT_PARAMS='{\"directory\": \"/tmp\"}' MCP_SERVER_URL=http://localhost:8081/mcp/sse MCP_HOST_ID=test-host go run:*)",
       "Bash(MCP_SCRIPT_NAME=\"file-checker\" MCP_SCRIPT_PARAMS='{\"path\": \"/etc/hostname\"}' MCP_SERVER_URL=http://localhost:8081/mcp/sse MCP_HOST_ID=test-host go run:*)",
       "Bash(MCP_SCRIPT_NAME=\"process-monitor\" MCP_SCRIPT_PARAMS='{\"\"keyword\"\": \"\"ssh\"\"}' MCP_SERVER_URL=http://localhost:8081/mcp/sse MCP_HOST_ID=test-host go run cmd/mcptest/main.go script)",
-      "Bash(MCP_SCRIPT_NAME=\"network-status\" MCP_SCRIPT_PARAMS='{\"\"port\"\": \"\"8081\"\"}' MCP_SERVER_URL=http://localhost:8081/mcp/sse MCP_HOST_ID=test-host go run cmd/mcptest/main.go script)"
+      "Bash(MCP_SCRIPT_NAME=\"network-status\" MCP_SCRIPT_PARAMS='{\"\"port\"\": \"\"8081\"\"}' MCP_SERVER_URL=http://localhost:8081/mcp/sse MCP_HOST_ID=test-host go run cmd/mcptest/main.go script)",
+      "Read(//Users/wangjuntao/.ssh/**)",
+      "Bash(ssh-keyscan:*)",
+      "Bash(ssh-keygen:*)",
+      "Bash(ssh:*)"
     ],
     "deny": [],
     "ask": []

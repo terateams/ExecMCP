@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/your-username/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/config"
 )
 
 // Logger 日志接口

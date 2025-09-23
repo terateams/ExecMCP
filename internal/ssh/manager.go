@@ -12,8 +12,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
 )
 
 // Manager SSH 连接管理器接口
@@ -163,26 +163,32 @@ func (m *RealManager) createNewSession(conn *RealConnection) (Session, error) {
 
 // createSSHClient 创建SSH客户端连接
 func (m *RealManager) createSSHClient(hostConfig config.SSHHost) (*ssh.Client, error) {
+	// 配置主机密钥校验
+	hostKeyCallback, err := m.getHostKeyCallback(hostConfig)
+	if err != nil {
+		return nil, fmt.Errorf("加载 known_hosts 失败: %w", err)
+	}
+
 	// 构建SSH配置
 	sshConfig := &ssh.ClientConfig{
 		User:            hostConfig.User,
-		HostKeyCallback: m.getHostKeyCallback(hostConfig),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         time.Duration(hostConfig.ConnectTimeout) * time.Second,
 	}
 
 	// 根据认证方式配置
-	var err error
+	var authErr error
 	switch hostConfig.AuthMethod {
 	case "private_key":
-		err = m.configurePrivateKey(sshConfig, hostConfig)
+		authErr = m.configurePrivateKey(sshConfig, hostConfig)
 	case "password":
-		err = m.configurePassword(sshConfig, hostConfig)
+		authErr = m.configurePassword(sshConfig, hostConfig)
 	default:
 		return nil, fmt.Errorf("不支持的认证方式: %s", hostConfig.AuthMethod)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("配置认证失败: %w", err)
+	if authErr != nil {
+		return nil, fmt.Errorf("配置认证失败: %w", authErr)
 	}
 
 	// 解析主机地址
@@ -203,21 +209,20 @@ func (m *RealManager) createSSHClient(hostConfig config.SSHHost) (*ssh.Client, e
 }
 
 // getHostKeyCallback 获取主机密钥回调函数
-func (m *RealManager) getHostKeyCallback(hostConfig config.SSHHost) ssh.HostKeyCallback {
-	if hostConfig.KnownHosts == "" {
-		// 如果没有配置known_hosts，使用不安全的方式（仅用于开发）
-		m.logger.Warn("未配置known_hosts文件，使用不安全的主机密钥验证", "host_id", hostConfig.ID)
-		return ssh.InsecureIgnoreHostKey()
+func (m *RealManager) getHostKeyCallback(hostConfig config.SSHHost) (ssh.HostKeyCallback, error) {
+	if strings.TrimSpace(hostConfig.KnownHosts) == "" {
+		m.logger.Error("未配置 known_hosts 文件，拒绝建立 SSH 连接", "host_id", hostConfig.ID)
+		return nil, fmt.Errorf("未配置 known_hosts 文件")
 	}
 
 	// 创建known_hosts验证回调
 	callback, err := knownhosts.New(hostConfig.KnownHosts)
 	if err != nil {
-		m.logger.Error("创建known_hosts验证失败", "host_id", hostConfig.ID, "error", err)
-		return ssh.InsecureIgnoreHostKey()
+		m.logger.Error("加载 known_hosts 文件失败", "host_id", hostConfig.ID, "path", hostConfig.KnownHosts, "error", err)
+		return nil, fmt.Errorf("无法加载 known_hosts 文件 '%s': %w", hostConfig.KnownHosts, err)
 	}
 
-	return callback
+	return callback, nil
 }
 
 // configurePrivateKey 配置私钥认证

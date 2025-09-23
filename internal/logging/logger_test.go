@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/config"
 )
 
 func TestNewLogger(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/your-username/ExecMCP
+module github.com/terateams/ExecMCP
 
 go 1.24.0
 

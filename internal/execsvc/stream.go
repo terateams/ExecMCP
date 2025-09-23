@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/logging"
-	"github.com/your-username/ExecMCP/internal/security"
-	"github.com/your-username/ExecMCP/internal/ssh"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/security"
+	"github.com/terateams/ExecMCP/internal/ssh"
 )
 
 // StreamManager 流式输出管理器
@@ -37,10 +37,19 @@ type CommandStream struct {
 
 // NewStreamManager 创建新的流管理器
 func NewStreamManager(cfg *config.Config, logger logging.Logger) *StreamManager {
+	return NewStreamManagerWithManager(cfg, logger, ssh.NewManager(cfg, logger))
+}
+
+// NewStreamManagerWithManager 创建新的流管理器，允许注入自定义 SSH 管理器（主要用于测试）
+func NewStreamManagerWithManager(cfg *config.Config, logger logging.Logger, manager ssh.Manager) *StreamManager {
+	if manager == nil {
+		return nil
+	}
+
 	return &StreamManager{
 		config:     cfg,
 		logger:     logger,
-		sshManager: ssh.NewManager(cfg, logger),
+		sshManager: manager,
 		filter:     security.NewFilter(&cfg.Security),
 	}
 }

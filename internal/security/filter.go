@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
-	"github.com/your-username/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/config"
 )
 
 // Filter 安全过滤器
@@ -258,15 +259,76 @@ func contains(slice []string, item string) bool {
 
 // isPathPrefix 检查路径是否以指定前缀开头（处理路径遍历）
 func isPathPrefix(path, prefix string) bool {
-	// 简化路径，处理 .. 和 .
-	cleanPath := filepath.Clean(path)
-	cleanPrefix := filepath.Clean(prefix)
+	canonicalPrefix, err := canonicalizePath(prefix)
+	if err != nil {
+		return false
+	}
 
-	if cleanPath == cleanPrefix {
+	if pathWithinPrefix(path, canonicalPrefix) {
 		return true
 	}
-	if len(cleanPath) > len(cleanPrefix) && cleanPath[:len(cleanPrefix)+1] == cleanPrefix+"/" {
-		return true
+
+	if !filepath.IsAbs(path) {
+		joined := filepath.Join(canonicalPrefix, path)
+		if pathWithinPrefix(joined, canonicalPrefix) {
+			return true
+		}
 	}
+
 	return false
+}
+
+func pathWithinPrefix(candidate, canonicalPrefix string) bool {
+	canonicalCandidate, err := canonicalizePath(candidate)
+	if err != nil {
+		return false
+	}
+
+	if pathsEqual(canonicalCandidate, canonicalPrefix) {
+		return true
+	}
+
+	rel, err := filepath.Rel(canonicalPrefix, canonicalCandidate)
+	if err != nil {
+		return false
+	}
+
+	cleanRel := filepath.Clean(rel)
+	if cleanRel == "." {
+		return true
+	}
+	if cleanRel == ".." || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) {
+		return false
+	}
+
+	return true
+}
+
+func canonicalizePath(p string) (string, error) {
+	if strings.TrimSpace(p) == "" {
+		return "", fmt.Errorf("empty path")
+	}
+
+	cleaned := filepath.Clean(p)
+	absolute := cleaned
+	if !filepath.IsAbs(cleaned) {
+		abs, err := filepath.Abs(cleaned)
+		if err != nil {
+			return "", err
+		}
+		absolute = abs
+	}
+
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = resolved
+	}
+
+	return filepath.Clean(absolute), nil
+}
+
+func pathsEqual(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }

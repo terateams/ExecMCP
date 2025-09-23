@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
 )
 
 // MockManager 模拟 SSH 连接管理器

@@ -9,10 +9,10 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/execsvc"
-	"github.com/your-username/ExecMCP/internal/logging"
-	"github.com/your-username/ExecMCP/internal/ssh"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/execsvc"
+	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/ssh"
 )
 
 // MCPServer MCP 服务器
@@ -399,13 +399,13 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 	var hosts []map[string]interface{}
 	for _, host := range m.config.SSHHosts {
 		hostInfo := map[string]interface{}{
-			"id":              host.ID,
-			"address":         host.Addr,
-			"user":            host.User,
-			"auth_method":      host.AuthMethod,
+			"id":                  host.ID,
+			"address":             host.Addr,
+			"user":                host.User,
+			"auth_method":         host.AuthMethod,
 			"connect_timeout_sec": host.ConnectTimeout,
-			"keepalive_sec":   host.KeepaliveSec,
-			"max_sessions":    host.MaxSessions,
+			"keepalive_sec":       host.KeepaliveSec,
+			"max_sessions":        host.MaxSessions,
 		}
 
 		// 添加认证相关信息
@@ -420,9 +420,9 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 	}
 
 	response := map[string]interface{}{
-		"hosts":       hosts,
-		"count":       len(hosts),
-		"queried_at":  time.Now().Format(time.RFC3339),
+		"hosts":      hosts,
+		"count":      len(hosts),
+		"queried_at": time.Now().Format(time.RFC3339),
 		"notes": []string{
 			"所有配置的 SSH 主机列表",
 			"可以使用 test_connection 工具测试连接",

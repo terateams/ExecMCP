@@ -60,4 +60,6 @@ build/
 config.test.yaml
 __debug_*
 /mcptest
-*。log
+*.log
+.gocache
+testdata

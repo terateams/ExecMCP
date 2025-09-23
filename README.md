@@ -38,7 +38,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/ExecMCP.git
+git clone https://github.com/terateams/ExecMCP.git
 cd ExecMCP
 
 # 下载依赖
@@ -404,8 +404,8 @@ security:
 ## 🆘 支持
 
 - 📧 Email: support@example.com
-- 🐛 Issues: [GitHub Issues](https://github.com/your-username/ExecMCP/issues)
-- 📖 文档: [Wiki](https://github.com/your-username/ExecMCP/wiki)
+- 🐛 Issues: [GitHub Issues](https://github.com/terateams/ExecMCP/issues)
+- 📖 文档: [Wiki](https://github.com/terateams/ExecMCP/wiki)
 
 ## 🔗 相关链接
 

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
-	"github.com/your-username/ExecMCP/internal/logging"
-	"github.com/your-username/ExecMCP/internal/security"
-	"github.com/your-username/ExecMCP/internal/ssh"
+	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/security"
+	"github.com/terateams/ExecMCP/internal/ssh"
 )
 
 // Service 命令执行服务

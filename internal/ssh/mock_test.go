@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-username/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/config"
 )
 
 func TestNewMockManager(t *testing.T) {
@@ -18,7 +18,7 @@ func TestNewMockManager(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -56,7 +56,7 @@ func TestMockManager_GetSession(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    2,
 			},
 		},
@@ -99,7 +99,7 @@ func TestMockManager_GetSession_SessionReuse(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    1,
 			},
 		},
@@ -136,7 +136,7 @@ func TestMockManager_SetFailConnect(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -164,7 +164,7 @@ func TestMockManager_Close(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -205,7 +205,7 @@ func TestMockManager_HealthCheck(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -248,7 +248,7 @@ func TestMockSession_ExecuteCommand(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -290,7 +290,7 @@ func TestMockSession_Close(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
 			},
 		},
@@ -324,7 +324,7 @@ func TestMockManager_ConcurrentAccess(t *testing.T) {
 				User:           "testuser",
 				AuthMethod:     "private_key",
 				PrivateKeyPath: "~/.ssh/id_rsa",
-				KnownHosts:     "~/.ssh/known_hosts",
+				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    10,
 			},
 		},
