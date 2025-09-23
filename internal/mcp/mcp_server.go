@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -98,6 +99,9 @@ func (m *MCPServer) registerTools() {
 		mcp.WithNumber("timeout_sec",
 			mcp.Description("Timeout in seconds for command execution (default: 30)"),
 		),
+		mcp.WithString("auth_token",
+			mcp.Description("Server auth token (if configured)"),
+		),
 	)
 	m.server.AddTool(execCommandTool, m.handleExecCommand)
 
@@ -118,6 +122,9 @@ func (m *MCPServer) registerTools() {
 		mcp.WithNumber("timeout_sec",
 			mcp.Description("Timeout in seconds for script execution (default: 30)"),
 		),
+		mcp.WithString("auth_token",
+			mcp.Description("Server auth token (if configured)"),
+		),
 	)
 	m.server.AddTool(execScriptTool, m.handleExecScript)
 
@@ -127,6 +134,9 @@ func (m *MCPServer) registerTools() {
 		mcp.WithString("type",
 			mcp.Description("Type of items to list: 'all', 'commands', or 'scripts' (default: 'all')"),
 			mcp.WithStringEnumItems([]string{"all", "commands", "scripts"}),
+		),
+		mcp.WithString("auth_token",
+			mcp.Description("Server auth token (if configured)"),
 		),
 	)
 	m.server.AddTool(listCommandsTool, m.handleListCommands)
@@ -138,12 +148,18 @@ func (m *MCPServer) registerTools() {
 			mcp.Required(),
 			mcp.Description("The unique identifier of the remote host to test connection for"),
 		),
+		mcp.WithString("auth_token",
+			mcp.Description("Server auth token (if configured)"),
+		),
 	)
 	m.server.AddTool(testConnectionTool, m.handleTestConnection)
 
 	// 注册 list_hosts 工具
 	listHostsTool := mcp.NewTool("list_hosts",
 		mcp.WithDescription("List all configured SSH hosts"),
+		mcp.WithString("auth_token",
+			mcp.Description("Server auth token (if configured)"),
+		),
 	)
 	m.server.AddTool(listHostsTool, m.handleListHosts)
 }
@@ -185,6 +201,9 @@ func (m *MCPServer) Stop() error {
 
 // 处理工具调用
 func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := m.checkAuth(ctx, req); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	hostID := mcp.ParseString(req, "host_id", "")
 	command := mcp.ParseString(req, "command", "")
 
@@ -242,6 +261,9 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 }
 
 func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := m.checkAuth(ctx, req); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	hostID := mcp.ParseString(req, "host_id", "")
 	scriptName := mcp.ParseString(req, "script_name", "")
 
@@ -287,6 +309,9 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 }
 
 func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := m.checkAuth(ctx, req); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	listType := mcp.ParseString(req, "type", "all")
 
 	allowedCommands := []string{
@@ -347,6 +372,9 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 }
 
 func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := m.checkAuth(ctx, req); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	hostID := mcp.ParseString(req, "host_id", "")
 
 	if hostID == "" {
@@ -387,6 +415,9 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 }
 
 func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := m.checkAuth(ctx, req); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	m.logger.Info("收到主机列表请求")
 
 	var hosts []map[string]interface{}
@@ -415,4 +446,37 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")
 	return mcp.NewToolResultText(string(responseJson)), nil
+}
+
+func (m *MCPServer) checkAuth(ctx context.Context, req mcp.CallToolRequest) error {
+	expected := strings.TrimSpace(m.config.Server.AuthToken)
+	if expected == "" {
+		return nil
+	}
+
+	provided := strings.TrimSpace(req.GetString("auth_token", ""))
+
+	if provided == "" && req.Params.Meta != nil && req.Params.Meta.AdditionalFields != nil {
+		if v, ok := req.Params.Meta.AdditionalFields["auth_token"].(string); ok {
+			provided = strings.TrimSpace(v)
+		}
+	}
+
+	if provided == "" && req.Header != nil {
+		if authHeader := strings.TrimSpace(req.Header.Get("Authorization")); authHeader != "" {
+			const bearer = "bearer "
+			lower := strings.ToLower(authHeader)
+			if strings.HasPrefix(lower, bearer) {
+				provided = strings.TrimSpace(authHeader[len(bearer):])
+			}
+		}
+	}
+
+	if provided == "" {
+		return fmt.Errorf("unauthorized: missing auth token")
+	}
+	if provided != expected {
+		return fmt.Errorf("unauthorized: invalid auth token")
+	}
+	return nil
 }

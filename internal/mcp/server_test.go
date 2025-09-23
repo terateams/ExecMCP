@@ -4,9 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	mcplib "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
@@ -377,4 +380,67 @@ func TestMCPServer_ToolHandlersExist(t *testing.T) {
 			t.Errorf("工具 %s 的处理器为 nil", name)
 		}
 	}
+}
+
+func TestMCPServer_AuthTokenRequired(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			BindAddr:  "127.0.0.1:0",
+			AuthToken: "secret-token",
+		},
+		SSHHosts: []config.SSHHost{
+			{
+				ID:         "test-host",
+				Addr:       "localhost:22",
+				User:       "testuser",
+				AuthMethod: "password",
+				Password:   "testpass",
+			},
+		},
+	}
+
+	logger := logging.NewLogger(cfg.Logging)
+	server, err := NewMCPServer(cfg, logger)
+	if err != nil {
+		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
+	}
+
+	makeReq := func(args map[string]any, header http.Header) mcplib.CallToolRequest {
+		return mcplib.CallToolRequest{
+			Header: header,
+			Params: mcplib.CallToolParams{Arguments: args},
+		}
+	}
+
+	assertError := func(res *mcplib.CallToolResult, msg string) {
+		if res == nil || !res.IsError {
+			t.Fatalf("%s: 应返回错误", msg)
+		}
+		if text := toolResultText(res); !strings.Contains(text, msg) {
+			t.Fatalf("%s: 期望错误消息包含 '%s'，实际: %s", msg, msg, text)
+		}
+	}
+
+	res, _ := server.handleListHosts(context.Background(), makeReq(map[string]any{}, http.Header{}))
+	assertError(res, "missing auth token")
+
+	res, _ = server.handleListHosts(context.Background(), makeReq(map[string]any{"auth_token": "wrong"}, http.Header{}))
+	assertError(res, "invalid auth token")
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer secret-token")
+	res, _ = server.handleListHosts(context.Background(), makeReq(map[string]any{}, header))
+	if res == nil || res.IsError {
+		t.Fatalf("提供正确 token 应通过认证")
+	}
+}
+
+func toolResultText(res *mcplib.CallToolResult) string {
+	if res == nil || len(res.Content) == 0 {
+		return ""
+	}
+	if text, ok := res.Content[0].(mcplib.TextContent); ok {
+		return text.Text
+	}
+	return ""
 }
