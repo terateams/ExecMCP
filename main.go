@@ -16,7 +16,7 @@ import (
 func main() {
 	// 解析命令行参数
 	var configPath string
-	flag.StringVar(&configPath, "c", "config.test.yaml", "配置文件路径")
+	flag.StringVar(&configPath, "config", "config.test.yaml", "配置文件路径")
 	flag.Parse()
 
 	// 加载配置
