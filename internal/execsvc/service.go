@@ -1,8 +1,11 @@
 package execsvc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
+	"text/template"
 	"time"
 
 	"github.com/terateams/ExecMCP/internal/config"
@@ -170,7 +173,7 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 	mergedParams := s.applyDefaultValues(scriptConfig, req.Parameters)
 
 	// 渲染脚本模板
-	command, err := s.renderTemplate(scriptConfig.Template, mergedParams)
+	command, err := s.renderTemplate(scriptConfig.Template, mergedParams, scriptConfig.UseShell)
 	if err != nil {
 		return nil, fmt.Errorf("模板渲染失败: %w", err)
 	}
@@ -246,20 +249,42 @@ func (s *Service) findScriptConfig(scriptName string) *config.ScriptConfig {
 }
 
 // renderTemplate 渲染模板
-func (s *Service) renderTemplate(template string, params map[string]interface{}) (string, error) {
-	// TODO: 实现安全的模板渲染
-	// 1. 参数验证和转义
-	// 2. 替换模板中的占位符
-	// 3. 返回渲染后的命令
-
-	// 临时实现：简单的字符串替换
-	result := template
-	for key, value := range params {
-		placeholder := "{{" + key + "}}"
-		result = replaceAll(result, placeholder, fmt.Sprintf("%v", value))
+func (s *Service) renderTemplate(templateStr string, params map[string]interface{}, useShell bool) (string, error) {
+	if templateStr == "" {
+		return "", fmt.Errorf("模板内容为空")
 	}
 
-	return result, nil
+	sanitized := make(map[string]string, len(params))
+	raw := make(map[string]string, len(params))
+
+	for key, value := range params {
+		strVal := fmt.Sprintf("%v", value)
+		raw[key] = strVal
+		if useShell {
+			sanitized[key] = shellQuote(strVal)
+		} else {
+			sanitized[key] = strVal
+		}
+	}
+
+	funcMap := template.FuncMap{
+		"raw": func(key string) string {
+			return raw[key]
+		},
+		"shellQuote": shellQuote,
+	}
+
+	tmpl, err := template.New("script").Funcs(funcMap).Parse(templateStr)
+	if err != nil {
+		return "", fmt.Errorf("解析模板失败: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, sanitized); err != nil {
+		return "", fmt.Errorf("模板渲染失败: %w", err)
+	}
+
+	return buf.String(), nil
 }
 
 // applyDefaultValues 应用默认值并合并参数
@@ -292,25 +317,11 @@ func (s *Service) validateParameters(scriptConfig *config.ScriptConfig, params m
 	return nil
 }
 
-// replaceAll 简单的字符串替换
-func replaceAll(s, old, new string) string {
-	result := s
-	for {
-		pos := findSubstring(result, old)
-		if pos == -1 {
-			break
-		}
-		result = result[:pos] + new + result[pos+len(old):]
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
 	}
-	return result
-}
 
-// findSubstring 查找子字符串位置
-func findSubstring(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+	escaped := strings.ReplaceAll(value, "'", "'\"'\"'")
+	return "'" + escaped + "'"
 }
