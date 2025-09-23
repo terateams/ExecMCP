@@ -24,43 +24,43 @@ type Config struct {
 // ServerConfig 服务器基本配置
 // 定义 MCP 服务器的网络绑定、并发限制、超时等基本参数
 type ServerConfig struct {
-	BindAddr       string `yaml:"bind_addr"`        // 服务器监听地址，格式为 "host:port"
-	LogLevel       string `yaml:"log_level"`        // 日志级别：debug, info, warn, error
-	MaxConcurrent  int    `yaml:"max_concurrent"`   // 最大并发请求数，超过限制的请求将被排队或拒绝
+	BindAddr       string `yaml:"bind_addr"`           // 服务器监听地址，格式为 "host:port"
+	LogLevel       string `yaml:"log_level"`           // 日志级别：debug, info, warn, error
+	MaxConcurrent  int    `yaml:"max_concurrent"`      // 最大并发请求数，超过限制的请求将被排队或拒绝
 	RequestTimeout int    `yaml:"request_timeout_sec"` // 单个请求的超时时间（秒）
-	AuthToken      string `yaml:"auth_token"`       // 认证令牌，用于客户端身份验证
+	AuthToken      string `yaml:"auth_token"`          // 认证令牌，用于客户端身份验证
 }
 
 // SSHHost SSH 主机连接配置
 // 定义远程主机的连接信息、认证方式和连接参数
 type SSHHost struct {
-	ID             string `yaml:"id"`                 // 主机唯一标识符，用于在请求中指定目标主机
-	Addr           string `yaml:"addr"`               // 主机地址，格式为 "host:port"
-	User           string `yaml:"user"`               // SSH 登录用户名
-	AuthMethod     string `yaml:"auth_method"`        // 认证方式：private_key 或 password
-	PrivateKeyPath string `yaml:"private_key_path"`   // 私钥文件路径（支持 ~ 展开）
-	Password       string `yaml:"password"`           // 登录密码（仅用于密码认证，建议仅在开发环境使用）
-	PasswordEnv    string `yaml:"password_env"`       // 保存密码的环境变量名称（优先级高于 password）
-	PasswordFile   string `yaml:"password_file"`      // 保存密码的文件路径（次优先级，支持 ~ 展开）
-	KnownHosts     string `yaml:"known_hosts"`       // known_hosts 文件路径，用于主机密钥验证
+	ID             string `yaml:"id"`                  // 主机唯一标识符，用于在请求中指定目标主机
+	Addr           string `yaml:"addr"`                // 主机地址，格式为 "host:port"
+	User           string `yaml:"user"`                // SSH 登录用户名
+	AuthMethod     string `yaml:"auth_method"`         // 认证方式：private_key 或 password
+	PrivateKeyPath string `yaml:"private_key_path"`    // 私钥文件路径（支持 ~ 展开）
+	Password       string `yaml:"password"`            // 登录密码（仅用于密码认证，建议仅在开发环境使用）
+	PasswordEnv    string `yaml:"password_env"`        // 保存密码的环境变量名称（优先级高于 password）
+	PasswordFile   string `yaml:"password_file"`       // 保存密码的文件路径（次优先级，支持 ~ 展开）
+	KnownHosts     string `yaml:"known_hosts"`         // known_hosts 文件路径，用于主机密钥验证
 	ConnectTimeout int    `yaml:"connect_timeout_sec"` // SSH 连接超时时间（秒）
-	KeepaliveSec   int    `yaml:"keepalive_sec"`     // SSH keepalive 间隔时间（秒）
-	MaxSessions    int    `yaml:"max_sessions"`      // 该主机的最大并发会话数
+	KeepaliveSec   int    `yaml:"keepalive_sec"`       // SSH keepalive 间隔时间（秒）
+	MaxSessions    int    `yaml:"max_sessions"`        // 该主机的最大并发会话数
 }
 
 // SecurityConfig 安全过滤和访问控制配置
 // 实现多层安全过滤机制，包括命令黑名单、白名单、参数验证等
 type SecurityConfig struct {
-	DefaultShell    bool     `yaml:"default_shell"`     // 默认是否使用 shell 执行命令（false=直接执行，更安全）
+	DefaultShell    bool     `yaml:"default_shell"`      // 默认是否使用 shell 执行命令（false=直接执行，更安全）
 	AllowShellFor   []string `yaml:"allow_shell_for"`    // 允许使用 shell 的命令列表
-	DenylistExact   []string `yaml:"denylist_exact"`    // 精确匹配的黑名单命令（如 rm, dd, mkfs 等）
-	DenylistRegex   []string `yaml:"denylist_regex"`    // 正则表达式黑名单（阻止危险命令模式）
+	DenylistExact   []string `yaml:"denylist_exact"`     // 精确匹配的黑名单命令（如 rm, dd, mkfs 等）
+	DenylistRegex   []string `yaml:"denylist_regex"`     // 正则表达式黑名单（阻止危险命令模式）
 	ArgDenyRegex    []string `yaml:"arg_deny_regex"`     // 参数正则黑名单（阻止危险参数如 --force）
-	AllowlistExact  []string `yaml:"allowlist_exact"`   // 精确匹配的白名单命令（允许的安全命令）
-	AllowlistRegex  []string `yaml:"allowlist_regex"`   // 正则表达式白名单（允许的命令模式）
+	AllowlistExact  []string `yaml:"allowlist_exact"`    // 精确匹配的白名单命令（允许的安全命令）
+	AllowlistRegex  []string `yaml:"allowlist_regex"`    // 正则表达式白名单（允许的命令模式）
 	WorkingDirAllow []string `yaml:"working_dir_allow"`  // 允许的工作目录列表（防止目录遍历攻击）
 	MaxOutputBytes  int64    `yaml:"max_output_bytes"`   // 命令输出最大字节数（防止内存耗尽）
-	EnablePTY       bool     `yaml:"enable_pty"`        // 是否启用伪终端（某些交互式命令需要）
+	EnablePTY       bool     `yaml:"enable_pty"`         // 是否启用伪终端（某些交互式命令需要）
 	RateLimitPerMin int      `yaml:"rate_limit_per_min"` // 每分钟每个主机的请求限制
 }
 
@@ -72,7 +72,7 @@ type ScriptConfig struct {
 	Prompt       string            `yaml:"prompt"`        // 向用户显示的提示信息
 	Template     string            `yaml:"template"`      // 命令模板，支持 {parameter} 占位符
 	Parameters   []ScriptParameter `yaml:"parameters"`    // 脚本参数定义
-	AllowedHosts []string          `yaml:"allowed_hosts"`  // 允许执行此脚本的主机列表（* 表示所有主机）
+	AllowedHosts []string          `yaml:"allowed_hosts"` // 允许执行此脚本的主机列表（* 表示所有主机）
 	TimeoutSec   int               `yaml:"timeout_sec"`   // 脚本执行超时时间（秒）
 	UseShell     bool              `yaml:"use_shell"`     // 是否使用 shell 执行脚本
 	WorkingDir   string            `yaml:"working_dir"`   // 脚本执行的工作目录
@@ -81,12 +81,12 @@ type ScriptConfig struct {
 // ScriptParameter 脚本参数定义
 // 定义脚本模板中可用的参数及其验证规则
 type ScriptParameter struct {
-	Name        string      `yaml:"name"`         // 参数名称，必须与模板中的占位符匹配
-	Type        string      `yaml:"type"`         // 参数类型：string, integer, boolean, float
-	Required    bool        `yaml:"required"`     // 是否为必需参数
-	Default     interface{} `yaml:"default"`      // 参数默认值（可选）
-	Description string      `yaml:"description"`  // 参数说明
-	Validation  string      `yaml:"validation"`   // 参数验证正则表达式（可选）
+	Name        string      `yaml:"name"`        // 参数名称，必须与模板中的占位符匹配
+	Type        string      `yaml:"type"`        // 参数类型：string, integer, boolean, float
+	Required    bool        `yaml:"required"`    // 是否为必需参数
+	Default     interface{} `yaml:"default"`     // 参数默认值（可选）
+	Description string      `yaml:"description"` // 参数说明
+	Validation  string      `yaml:"validation"`  // 参数验证正则表达式（可选）
 }
 
 // LoggingConfig 日志记录配置
@@ -112,11 +112,13 @@ type LoggingConfig struct {
 // 6. 展开路径中的 ~ 为用户主目录
 //
 // 参数：
-//   path - 配置文件的路径
+//
+//	path - 配置文件的路径
 //
 // 返回值：
-//   *Config - 解析完成的配置对象
-//   error - 加载过程中的错误，包含详细的错误信息
+//
+//	*Config - 解析完成的配置对象
+//	error - 加载过程中的错误，包含详细的错误信息
 func Load(path string) (*Config, error) {
 	// 读取配置文件内容
 	data, err := os.ReadFile(path)
@@ -382,5 +384,3 @@ func appendStringSliceFromEnv(target *[]string, envKey string) {
 		*target = append(*target, common.SplitCommaSeparated(value)...)
 	}
 }
-
-

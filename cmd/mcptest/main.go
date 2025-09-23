@@ -10,8 +10,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-	envconfig "github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/common"
+	envconfig "github.com/terateams/ExecMCP/internal/config"
 )
 
 type TestConfig struct {
@@ -104,7 +104,6 @@ func getTestConfig() TestConfig {
 
 	return cfg
 }
-
 
 func createClient() (*client.Client, error) {
 	config := getTestConfig()
@@ -301,7 +300,7 @@ func testListHosts() {
 
 	callRequest := mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
-			Name: "list_hosts",
+			Name:      "list_hosts",
 			Arguments: map[string]interface{}{},
 		},
 	}

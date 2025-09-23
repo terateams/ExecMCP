@@ -14,9 +14,6 @@ const EnvStagingPassword = "EXECMCP_STAGING_PASSWORD"
 // EnvTestFatal 测试中是否触发 fatal 错误（用于日志测试）
 const EnvTestFatal = "TEST_FATAL"
 
-
-
-
 // ===== 工具/客户端相关环境变量 =====
 
 // EnvMCPServerURL MCP 服务器 URL（用于测试客户端）

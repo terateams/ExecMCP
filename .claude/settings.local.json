@@ -52,7 +52,8 @@
       "Bash(ssh:*)",
       "Bash(docker build:*)",
       "Bash(CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build:*)",
-      "Bash(./execmcp:*)"
+      "Bash(./execmcp:*)",
+      "Bash(gofmt:*)"
     ],
     "deny": [],
     "ask": []
