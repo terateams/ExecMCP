@@ -227,7 +227,7 @@ func TestLogger_FileOutputInvalidPath(t *testing.T) {
 }
 
 func TestLogger_FatalExit(t *testing.T) {
-	if os.Getenv("TEST_FATAL") == "1" {
+	if os.Getenv(config.EnvTestFatal) == "1" {
 		cfg := config.LoggingConfig{
 			Level:  "info",
 			Format: "text",
@@ -241,7 +241,7 @@ func TestLogger_FatalExit(t *testing.T) {
 
 	// 测试 Fatal 是否会导致程序退出
 	cmd := testCommand(t, "go", "test", "-run", "TestLogger_FatalExit", "-v")
-	cmd.Env = append(os.Environ(), "TEST_FATAL=1")
+	cmd.Env = append(os.Environ(), config.EnvTestFatal+"=1")
 
 	err := cmd.Run()
 	if err == nil {

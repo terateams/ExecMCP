@@ -1,10 +1,13 @@
 package ssh
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
@@ -229,6 +232,49 @@ func TestRealManager_GetHostKeyCallback_WithValidKnownHosts(t *testing.T) {
 
 	if callback == nil {
 		t.Fatal("期望返回 host key 回调，但得到 nil")
+	}
+}
+
+func TestRealManager_ConfigurePasswordSources(t *testing.T) {
+	realLogger := logging.NewLogger(config.LoggingConfig{
+		Level:  "info",
+		Format: "text",
+		Output: "stdout",
+	})
+
+	manager := &RealManager{logger: realLogger}
+
+	sshConfig := &ssh.ClientConfig{}
+	host := config.SSHHost{ID: "env-host", AuthMethod: "password", PasswordEnv: config.EnvTestPassword}
+	os.Setenv(config.EnvTestPassword, "env-secret")
+	defer os.Unsetenv(config.EnvTestPassword)
+
+	if err := manager.configurePassword(sshConfig, host); err != nil {
+		t.Fatalf("期望从环境变量加载密码成功，但得到错误: %v", err)
+	}
+	if len(sshConfig.Auth) == 0 {
+		t.Fatal("期望配置 auth provider，但为空")
+	}
+
+	// 覆盖密码文件场景
+	sshConfig = &ssh.ClientConfig{}
+	passwordFile := t.TempDir() + "/password.txt"
+	if err := os.WriteFile(passwordFile, []byte("file-secret\n"), 0o600); err != nil {
+		t.Fatalf("写入密码文件失败: %v", err)
+	}
+
+	fileHost := config.SSHHost{ID: "file-host", AuthMethod: "password", PasswordFile: passwordFile}
+	if err := manager.configurePassword(sshConfig, fileHost); err != nil {
+		t.Fatalf("期望从密码文件加载成功，但得到错误: %v", err)
+	}
+	if len(sshConfig.Auth) == 0 {
+		t.Fatal("期望配置 auth provider，但为空")
+	}
+
+	// 缺少密码来源应返回错误
+	emptyHost := config.SSHHost{ID: "empty-host", AuthMethod: "password"}
+	if err := manager.configurePassword(&ssh.ClientConfig{}, emptyHost); err == nil {
+		t.Fatal("缺少密码来源时应返回错误")
 	}
 }
 

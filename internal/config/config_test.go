@@ -264,7 +264,7 @@ ssh_hosts:
 			expectedError: "配置验证失败: 主机 test-host 使用私钥认证但缺少私钥路径",
 		},
 		{
-			name: "密码认证但缺少密码",
+			name: "密码认证但缺少密码来源",
 			configContent: `
 server:
   bind_addr: "127.0.0.1:8080"
@@ -274,7 +274,7 @@ ssh_hosts:
     user: "testuser"
     auth_method: "password"
 `,
-			expectedError: "配置验证失败: 主机 test-host 使用密码认证但缺少密码",
+			expectedError: "配置验证失败: 主机 test-host 使用密码认证但缺少密码来源",
 		},
 		{
 			name: "脚本缺少名称",

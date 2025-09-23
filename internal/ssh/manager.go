@@ -208,7 +208,8 @@ func (m *RealManager) createSSHClient(hostConfig config.SSHHost) (*ssh.Client, e
 	return client, nil
 }
 
-// getHostKeyCallback 获取主机密钥回调函数
+// getHostKeyCallback 严格要求提供 known_hosts 文件，不再容忍 InsecureIgnoreHostKey，
+// 以免生产环境被中间人攻击。任何加载失败都会返回错误并写入日志。
 func (m *RealManager) getHostKeyCallback(hostConfig config.SSHHost) (ssh.HostKeyCallback, error) {
 	if strings.TrimSpace(hostConfig.KnownHosts) == "" {
 		m.logger.Error("未配置 known_hosts 文件，拒绝建立 SSH 连接", "host_id", hostConfig.ID)
@@ -264,11 +265,28 @@ func (m *RealManager) configurePrivateKey(sshConfig *ssh.ClientConfig, hostConfi
 
 // configurePassword 配置密码认证
 func (m *RealManager) configurePassword(sshConfig *ssh.ClientConfig, hostConfig config.SSHHost) error {
-	if hostConfig.Password == "" {
-		return fmt.Errorf("密码未配置")
+	password := strings.TrimSpace(hostConfig.Password)
+	if password == "" {
+		if envKey := strings.TrimSpace(hostConfig.PasswordEnv); envKey != "" {
+			password = os.Getenv(envKey)
+			if strings.TrimSpace(password) == "" {
+				return fmt.Errorf("从环境变量 %s 读取密码失败", envKey)
+			}
+		} else if filePath := strings.TrimSpace(hostConfig.PasswordFile); filePath != "" {
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("读取密码文件失败: %w", err)
+			}
+			password = strings.TrimSpace(string(data))
+			if password == "" {
+				return fmt.Errorf("密码文件 %s 内容为空", filePath)
+			}
+		} else {
+			return fmt.Errorf("密码未配置")
+		}
 	}
 
-	sshConfig.Auth = append(sshConfig.Auth, ssh.Password(hostConfig.Password))
+	sshConfig.Auth = append(sshConfig.Auth, ssh.Password(password))
 	m.logger.Debug("配置密码认证成功", "host_id", hostConfig.ID)
 	return nil
 }

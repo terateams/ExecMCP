@@ -40,7 +40,7 @@ func NewFilter(cfg *config.SecurityConfig) *Filter {
 	}
 }
 
-// Check 检查执行请求是否安全
+// Check 按照配置逐层校验命令：先阻断黑名单、危险参数，再根据 shell 使用约束及白名单决定是否放行。
 func (f *Filter) Check(req ExecRequest) error {
 	// 1. 检查空命令
 	if req.Command == "" {
@@ -126,7 +126,8 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 	}
 
-	// 如果启用了 shell，进行额外检查
+    // 如果启用了 shell，进行额外检查：只有明确允许的命令可以进入 shell，
+    // 同时强制拒绝常见的命令拼接与重定向符号，降低注入风险。
 	if req.Options.UseShell {
 		// 检查命令是否在允许使用 shell 的列表中
 		allowed := false
@@ -257,7 +258,8 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// isPathPrefix 检查路径是否以指定前缀开头（处理路径遍历）
+// isPathPrefix 判断 path 是否位于 prefix 目录内。
+// 通过绝对路径、符号链接解析与 filepath.Rel 组合，保障 ../ 或符号链接都无法逃逸。
 func isPathPrefix(path, prefix string) bool {
 	canonicalPrefix, err := canonicalizePath(prefix)
 	if err != nil {
@@ -278,6 +280,8 @@ func isPathPrefix(path, prefix string) bool {
 	return false
 }
 
+// pathWithinPrefix 在拿到已规范化的白名单目录后，再次规范化目标路径，
+// 通过 Rel 计算判断是否逃逸到目录外，避免简单字符串比较被绕过。
 func pathWithinPrefix(candidate, canonicalPrefix string) bool {
 	canonicalCandidate, err := canonicalizePath(candidate)
 	if err != nil {
@@ -304,6 +308,7 @@ func pathWithinPrefix(candidate, canonicalPrefix string) bool {
 	return true
 }
 
+// canonicalizePath 对输入路径做清理、绝对化及符号链接解析，返回可比较的真实路径。
 func canonicalizePath(p string) (string, error) {
 	if strings.TrimSpace(p) == "" {
 		return "", fmt.Errorf("empty path")

@@ -75,13 +75,14 @@ func NewService(cfg *config.Config, logger logging.Logger) (*Service, error) {
 func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecResult, error) {
 	startTime := time.Now()
 
+	// 记录执行上下文，便于审计与排查问题
 	s.logger.Info("开始执行命令",
 		"host_id", req.HostID,
 		"command", req.Command,
 		"args", req.Args,
 		"use_shell", req.Options.UseShell)
 
-	// 1. 安全过滤
+	// 1. 安全过滤：所有入口统一走安全策略，确保命令、参数和工作目录符合配置
 	securityReq := security.ExecRequest{
 		HostID:  req.HostID,
 		Command: req.Command,
@@ -104,7 +105,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		return nil, fmt.Errorf("安全检查失败: %w", err)
 	}
 
-	// 2. 获取 SSH 会话
+	// 2. 获取 SSH 会话：通过连接管理器拿到复用的 SSH 会话，失败直接终止
 	session, err := s.sshManager.GetSession(req.HostID)
 	if err != nil {
 		s.logger.Error("获取 SSH 会话失败",
@@ -124,7 +125,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		return nil, fmt.Errorf("命令执行失败: %w", err)
 	}
 
-	// 4. 处理输出截断
+	// 4. 处理输出截断：避免单个命令输出过大拖垮上层调用者
 	maxOutput := s.config.Security.MaxOutputBytes
 	truncated := false
 	if int64(len(output)) > maxOutput {
@@ -138,7 +139,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 	}
 
 	result := &ExecResult{
-		ExitCode:   0, // Mock SSH 会话总是返回成功
+		ExitCode:   0, // 成功路径下默认视为 0，失败场景会在上方直接返回 error
 		Stdout:     output,
 		Stderr:     "",
 		Truncated:  truncated,
@@ -158,43 +159,44 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecResult, error) {
 	startTime := time.Now()
 
+	// 脚本执行同样先记录关键信息，便于追踪具体业务脚本
 	s.logger.Info("开始执行脚本",
 		"host_id", req.HostID,
 		"script_name", req.ScriptName,
 		"parameters", req.Parameters)
 
-	// 查找脚本配置
+	// 查找脚本配置：脚本必须在配置文件中明确定义
 	scriptConfig := s.findScriptConfig(req.ScriptName)
 	if scriptConfig == nil {
 		return nil, fmt.Errorf("脚本 '%s' 不存在", req.ScriptName)
 	}
 
-	// 应用默认值并合并参数
+	// 合并用户参数与默认值，确保模板渲染阶段数据齐全
 	mergedParams := s.applyDefaultValues(scriptConfig, req.Parameters)
 
-	// 渲染脚本模板
+	// 使用安全模板引擎渲染脚本，自动处理 shell 注入风险
 	command, err := s.renderTemplate(scriptConfig.Template, mergedParams, scriptConfig.UseShell)
 	if err != nil {
 		return nil, fmt.Errorf("模板渲染失败: %w", err)
 	}
 
-	// 验证参数
+	// 预留校验逻辑：未来可在此扩展类型、范围等校验
 	if err := s.validateParameters(scriptConfig, mergedParams); err != nil {
 		return nil, fmt.Errorf("参数验证失败: %w", err)
 	}
 
-	// 构建执行请求 - 使用脚本配置中的选项
+	// 构建执行请求 - 使用脚本配置中的选项，确保行为与声明保持一致
 	var execReq ExecRequest
 
 	if scriptConfig.UseShell {
-		// 对于 shell 脚本，使用 sh 作为命令，脚本内容作为参数
+		// 对于 shell 脚本，统一由 /bin/sh 执行渲染后的命令字符串
 		execReq = ExecRequest{
 			HostID:  req.HostID,
 			Command: "sh",
 			Args:    []string{"-c", command},
 			Options: ExecOptions{
 				CWD:         scriptConfig.WorkingDir,
-				UseShell:    false, // 不需要额外的 shell 包装，因为我们直接调用 sh
+				UseShell:    false, // 嵌套 shell 反而危险，因此保持 false
 				TimeoutSec:  req.Options.TimeoutSec,
 				Env:         req.Options.Env,
 				Stream:      req.Options.Stream,
@@ -248,7 +250,10 @@ func (s *Service) findScriptConfig(scriptName string) *config.ScriptConfig {
 	return nil
 }
 
-// renderTemplate 渲染模板
+// renderTemplate 使用 text/template 渲染脚本命令。
+// 如果脚本需要通过 shell 执行，模板内的默认变量一律会被 shellQuote 包裹，
+// 这样就算用户参数里带有 `;`、`&&` 等特殊字符也不会被注入。
+// 同时提供 raw()/shellQuote() 辅助函数，方便在特殊场景下自行决定转义策略。
 func (s *Service) renderTemplate(templateStr string, params map[string]interface{}, useShell bool) (string, error) {
 	if templateStr == "" {
 		return "", fmt.Errorf("模板内容为空")
@@ -317,6 +322,8 @@ func (s *Service) validateParameters(scriptConfig *config.ScriptConfig, params m
 	return nil
 }
 
+// shellQuote 将任意参数包裹成安全的单引号表达式，并对内部单引号进行 POSIX 兼容的转义，
+// 用于生成 `sh -c` 等命令的参数，确保字符串永远被视作字面量。
 func shellQuote(value string) string {
 	if value == "" {
 		return "''"

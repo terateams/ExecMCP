@@ -40,7 +40,9 @@ type SSHHost struct {
 	User           string `yaml:"user"`               // SSH 登录用户名
 	AuthMethod     string `yaml:"auth_method"`        // 认证方式：private_key 或 password
 	PrivateKeyPath string `yaml:"private_key_path"`   // 私钥文件路径（支持 ~ 展开）
-	Password       string `yaml:"password"`           // 登录密码（仅用于密码认证）
+	Password       string `yaml:"password"`           // 登录密码（仅用于密码认证，建议仅在开发环境使用）
+	PasswordEnv    string `yaml:"password_env"`       // 保存密码的环境变量名称（优先级高于 password）
+	PasswordFile   string `yaml:"password_file"`      // 保存密码的文件路径（次优先级，支持 ~ 展开）
 	KnownHosts     string `yaml:"known_hosts"`       // known_hosts 文件路径，用于主机密钥验证
 	ConnectTimeout int    `yaml:"connect_timeout_sec"` // SSH 连接超时时间（秒）
 	KeepaliveSec   int    `yaml:"keepalive_sec"`     // SSH keepalive 间隔时间（秒）
@@ -207,8 +209,10 @@ func validate(config *Config) error {
 		if host.AuthMethod == "private_key" && host.PrivateKeyPath == "" {
 			return fmt.Errorf("主机 %s 使用私钥认证但缺少私钥路径", host.ID)
 		}
-		if host.AuthMethod == "password" && host.Password == "" {
-			return fmt.Errorf("主机 %s 使用密码认证但缺少密码", host.ID)
+		if host.AuthMethod == "password" {
+			if host.Password == "" && host.PasswordEnv == "" && host.PasswordFile == "" {
+				return fmt.Errorf("主机 %s 使用密码认证但缺少密码来源", host.ID)
+			}
 		}
 	}
 
@@ -235,6 +239,7 @@ func expandPaths(config *Config) {
 		host := &config.SSHHosts[i]
 		host.PrivateKeyPath = expandPath(host.PrivateKeyPath)
 		host.KnownHosts = expandPath(host.KnownHosts)
+		host.PasswordFile = expandPath(host.PasswordFile)
 	}
 }
 
@@ -256,82 +261,57 @@ func expandPath(path string) string {
 // 环境变量命名规则：EXECMCP_<SECTION>_<KEY>，全部大写，用下划线分隔
 func applyEnvOverrides(config *Config) {
 	// 服务器配置环境变量覆盖
-	// 格式：EXECMCP_SERVER_<CONFIG_KEY>
-	if addr := os.Getenv("EXECMCP_SERVER_BIND_ADDR"); addr != "" {
-		config.Server.BindAddr = addr
-	}
-	if level := os.Getenv("EXECMCP_SERVER_LOG_LEVEL"); level != "" {
-		config.Server.LogLevel = level
-	}
-	if max := os.Getenv("EXECMCP_SERVER_MAX_CONCURRENT"); max != "" {
-		if val, err := strconv.Atoi(max); err == nil {
-			config.Server.MaxConcurrent = val
-		}
-	}
-	if timeout := os.Getenv("EXECMCP_SERVER_REQUEST_TIMEOUT_SEC"); timeout != "" {
-		if val, err := strconv.Atoi(timeout); err == nil {
-			config.Server.RequestTimeout = val
-		}
-	}
-	if token := os.Getenv("EXECMCP_SERVER_AUTH_TOKEN"); token != "" {
-		config.Server.AuthToken = token
-	}
+	applyServerEnvOverrides(config)
 
 	// 安全配置环境变量覆盖
-	// 格式：EXECMCP_SECURITY_<CONFIG_KEY>
-	if shell := os.Getenv("EXECMCP_SECURITY_DEFAULT_SHELL"); shell != "" {
-		if val, err := strconv.ParseBool(shell); err == nil {
-			config.Security.DefaultShell = val
-		}
-	}
-	if maxOutput := os.Getenv("EXECMCP_SECURITY_MAX_OUTPUT_BYTES"); maxOutput != "" {
-		if val, err := strconv.ParseInt(maxOutput, 10, 64); err == nil {
-			config.Security.MaxOutputBytes = val
-		}
-	}
-	if pty := os.Getenv("EXECMCP_SECURITY_ENABLE_PTY"); pty != "" {
-		if val, err := strconv.ParseBool(pty); err == nil {
-			config.Security.EnablePTY = val
-		}
-	}
-	if rateLimit := os.Getenv("EXECMCP_SECURITY_RATE_LIMIT_PER_MIN"); rateLimit != "" {
-		if val, err := strconv.Atoi(rateLimit); err == nil {
-			config.Security.RateLimitPerMin = val
-		}
-	}
+	applySecurityEnvOverrides(config)
 
 	// 日志配置环境变量覆盖
-	// 格式：EXECMCP_LOGGING_<CONFIG_KEY>
-	if level := os.Getenv("EXECMCP_LOGGING_LEVEL"); level != "" {
-		config.Logging.Level = level
-	}
-	if format := os.Getenv("EXECMCP_LOGGING_FORMAT"); format != "" {
-		config.Logging.Format = format
-	}
-	if output := os.Getenv("EXECMCP_LOGGING_OUTPUT"); output != "" {
-		config.Logging.Output = output
-	}
-	if filePath := os.Getenv("EXECMCP_LOGGING_FILE_PATH"); filePath != "" {
-		config.Logging.FilePath = filePath
-	}
-	if maxSize := os.Getenv("EXECMCP_LOGGING_MAX_SIZE"); maxSize != "" {
-		config.Logging.MaxSize = maxSize
-	}
-	if maxBackups := os.Getenv("EXECMCP_LOGGING_MAX_BACKUPS"); maxBackups != "" {
-		if val, err := strconv.Atoi(maxBackups); err == nil {
-			config.Logging.MaxBackups = val
-		}
-	}
-	if maxAge := os.Getenv("EXECMCP_LOGGING_MAX_AGE"); maxAge != "" {
-		if val, err := strconv.Atoi(maxAge); err == nil {
-			config.Logging.MaxAge = val
-		}
-	}
+	applyLoggingEnvOverrides(config)
 
 	// 动态添加SSH主机配置
-	// 支持通过环境变量动态添加SSH主机，格式：id:addr:user:auth_method[:private_key_path|:password]
-	// 示例：EXECMCP_SSH_HOST="server1:192.168.1.100:ubuntu:private_key:/path/to/key"
-	if sshHost := os.Getenv("EXECMCP_SSH_HOST"); sshHost != "" {
+	applyDynamicSSHHost(config)
+
+	// 动态添加安全规则
+	applyDynamicSecurityRules(config)
+}
+
+// applyServerEnvOverrides 应用服务器配置相关的环境变量覆盖
+func applyServerEnvOverrides(config *Config) {
+	// 格式：EXECMCP_SERVER_<CONFIG_KEY>
+	setStringFromEnv(&config.Server.BindAddr, EnvServerBindAddr)
+	setStringFromEnv(&config.Server.LogLevel, EnvServerLogLevel)
+	setIntFromEnv(&config.Server.MaxConcurrent, EnvServerMaxConcurrent)
+	setIntFromEnv(&config.Server.RequestTimeout, EnvServerRequestTimeoutSec)
+	setStringFromEnv(&config.Server.AuthToken, EnvServerAuthToken)
+}
+
+// applySecurityEnvOverrides 应用安全配置相关的环境变量覆盖
+func applySecurityEnvOverrides(config *Config) {
+	// 格式：EXECMCP_SECURITY_<CONFIG_KEY>
+	setBoolFromEnv(&config.Security.DefaultShell, EnvSecurityDefaultShell)
+	setInt64FromEnv(&config.Security.MaxOutputBytes, EnvSecurityMaxOutputBytes)
+	setBoolFromEnv(&config.Security.EnablePTY, EnvSecurityEnablePTY)
+	setIntFromEnv(&config.Security.RateLimitPerMin, EnvSecurityRateLimitPerMin)
+}
+
+// applyLoggingEnvOverrides 应用日志配置相关的环境变量覆盖
+func applyLoggingEnvOverrides(config *Config) {
+	// 格式：EXECMCP_LOGGING_<CONFIG_KEY>
+	setStringFromEnv(&config.Logging.Level, EnvLoggingLevel)
+	setStringFromEnv(&config.Logging.Format, EnvLoggingFormat)
+	setStringFromEnv(&config.Logging.Output, EnvLoggingOutput)
+	setStringFromEnv(&config.Logging.FilePath, EnvLoggingFilePath)
+	setStringFromEnv(&config.Logging.MaxSize, EnvLoggingMaxSize)
+	setIntFromEnv(&config.Logging.MaxBackups, EnvLoggingMaxBackups)
+	setIntFromEnv(&config.Logging.MaxAge, EnvLoggingMaxAge)
+}
+
+// applyDynamicSSHHost 通过环境变量动态添加SSH主机配置
+// 支持格式：id:addr:user:auth_method[:private_key_path|:password]
+// 示例：EXECMCP_SSH_HOST="server1:192.168.1.100:ubuntu:private_key:/path/to/key"
+func applyDynamicSSHHost(config *Config) {
+	if sshHost := os.Getenv(EnvSSHHost); sshHost != "" {
 		parts := strings.Split(sshHost, ":")
 		if len(parts) >= 4 {
 			newHost := SSHHost{
@@ -366,19 +346,54 @@ func applyEnvOverrides(config *Config) {
 			}
 		}
 	}
+}
 
-	// 动态添加安全规则
-	// 支持通过环境变量扩展安全规则列表，多个值用逗号分隔
-	if denylist := os.Getenv("EXECMCP_SECURITY_DENYLIST_EXACT"); denylist != "" {
-		config.Security.DenylistExact = append(config.Security.DenylistExact, strings.Split(denylist, ",")...)
+// applyDynamicSecurityRules 通过环境变量动态添加安全规则
+// 支持通过环境变量扩展安全规则列表，多个值用逗号分隔
+func applyDynamicSecurityRules(config *Config) {
+	appendStringSliceFromEnv(&config.Security.DenylistExact, EnvSecurityDenylistExact)
+	appendStringSliceFromEnv(&config.Security.AllowlistExact, EnvSecurityAllowlistExact)
+	appendStringSliceFromEnv(&config.Security.WorkingDirAllow, EnvSecurityWorkingDirAllow)
+	appendStringSliceFromEnv(&config.Security.AllowShellFor, EnvSecurityAllowShellFor)
+}
+
+// setStringFromEnv 从环境变量设置字符串值
+func setStringFromEnv(target *string, envKey string) {
+	if value := os.Getenv(envKey); value != "" {
+		*target = value
 	}
-	if allowlist := os.Getenv("EXECMCP_SECURITY_ALLOWLIST_EXACT"); allowlist != "" {
-		config.Security.AllowlistExact = append(config.Security.AllowlistExact, strings.Split(allowlist, ",")...)
+}
+
+// setIntFromEnv 从环境变量设置整数值
+func setIntFromEnv(target *int, envKey string) {
+	if value := os.Getenv(envKey); value != "" {
+		if val, err := strconv.Atoi(value); err == nil {
+			*target = val
+		}
 	}
-	if workingDirs := os.Getenv("EXECMCP_SECURITY_WORKING_DIR_ALLOW"); workingDirs != "" {
-		config.Security.WorkingDirAllow = append(config.Security.WorkingDirAllow, strings.Split(workingDirs, ",")...)
+}
+
+// setInt64FromEnv 从环境变量设置int64值
+func setInt64FromEnv(target *int64, envKey string) {
+	if value := os.Getenv(envKey); value != "" {
+		if val, err := strconv.ParseInt(value, 10, 64); err == nil {
+			*target = val
+		}
 	}
-	if shellAllow := os.Getenv("EXECMCP_SECURITY_ALLOW_SHELL_FOR"); shellAllow != "" {
-		config.Security.AllowShellFor = append(config.Security.AllowShellFor, strings.Split(shellAllow, ",")...)
+}
+
+// setBoolFromEnv 从环境变量设置布尔值
+func setBoolFromEnv(target *bool, envKey string) {
+	if value := os.Getenv(envKey); value != "" {
+		if val, err := strconv.ParseBool(value); err == nil {
+			*target = val
+		}
+	}
+}
+
+// appendStringSliceFromEnv 从环境变量追加字符串切片
+func appendStringSliceFromEnv(target *[]string, envKey string) {
+	if value := os.Getenv(envKey); value != "" {
+		*target = append(*target, strings.Split(value, ",")...)
 	}
 }

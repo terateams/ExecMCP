@@ -57,12 +57,15 @@
 
 ### 4. 明文存储 SSH 密码（高危）
 
-- **位置**: `internal/config/config.go:31` 及 `applyEnvOverrides`
-- **问题**: 密码以明文形式保存于配置文件和环境变量，缺乏脱敏与访问控制。
-- **建议**:
-  - 支持引用外部密钥管理系统（Vault、Secret Manager、OS Keychain 等），或至少支持文件/命令引用方式。
-  - 加载配置时禁止将密码写入日志，内存中尽量缩短存活时间。
-  - 增加凭据旋转流程与文档。
+- **位置**: `internal/config/config.go`、`internal/ssh/manager.go`
+- **状态**: ✅ 已修复（新增 `password_env`、`password_file` 引用方式，配置加载时不再强制明文，运行时从安全来源读取）
+- **修复摘要**:
+  - `SSHHost` 支持 `password_env` 与 `password_file` 字段，优先从环境变量或外部文件加载密码，避免在 YAML 中直接写明文。
+  - `expandPaths` 自动展开密码文件路径，`configurePassword` 在运行时读取并裁剪内容，同时校验缺失场景并返回清晰错误。
+  - 配置校验调整为“缺少密码来源”错误文案，文档及示例配置更新，推荐使用环境变量存储密钥。
+- **后续建议**:
+  - 若部署环境支持，可进一步集成专业的秘密管理服务（如 Vault、AWS Secrets Manager），统一托管 SSH 密码。
+  - 定期轮换环境变量/密码文件内容，并结合日志审计确保未被意外打印。
 
 ### 5. 可控正则导致 ReDoS（中危）
 

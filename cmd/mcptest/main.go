@@ -10,6 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	envconfig "github.com/terateams/ExecMCP/internal/config"
 )
 
 type TestConfig struct {
@@ -67,13 +68,13 @@ func printUsage() {
 	fmt.Println("  help              Show this help message")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
-	fmt.Println("  MCP_SERVER_URL    Server URL (default: http://localhost:8081/mcp/sse)")
-	fmt.Println("  MCP_HOST_ID       Host ID for testing (default: test-host)")
-	fmt.Println("  MCP_COMMAND       Command to execute (default: whoami)")
-	fmt.Println("  MCP_ARGS          Command arguments (comma-separated)")
-	fmt.Println("  MCP_USE_SHELL     Use shell (true/false, default: false)")
-	fmt.Println("  MCP_TIMEOUT       Timeout in seconds (default: 30)")
-	fmt.Println("  MCP_LIST_TYPE     List type for list-commands: all, commands, scripts (default: all)")
+	fmt.Println("  EXECMCP_MCP_SERVER_URL    Server URL (default: http://localhost:8081/mcp/sse)")
+	fmt.Println("  EXECMCP_MCP_HOST_ID       Host ID for testing (default: test-host)")
+	fmt.Println("  EXECMCP_MCP_COMMAND       Command to execute (default: whoami)")
+	fmt.Println("  EXECMCP_MCP_ARGS          Command arguments (comma-separated)")
+	fmt.Println("  EXECMCP_MCP_USE_SHELL     Use shell (true/false, default: false)")
+	fmt.Println("  EXECMCP_MCP_TIMEOUT       Timeout in seconds (default: 30)")
+	fmt.Println("  EXECMCP_MCP_LIST_TYPE     List type for list-commands: all, commands, scripts (default: all)")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  go run cmd/mcptest/main.go list")
@@ -81,26 +82,26 @@ func printUsage() {
 	fmt.Println("  go run cmd/mcptest/main.go list-commands commands")
 	fmt.Println("  go run cmd/mcptest/main.go list-commands scripts")
 	fmt.Println("  go run cmd/mcptest/main.go exec")
-	fmt.Println("  MCP_LIST_TYPE=commands go run cmd/mcptest/main.go list-commands")
-	fmt.Println("  MCP_SERVER_URL=http://localhost:8081/mcp/sse MCP_HOST_ID=test-host go run cmd/mcptest/main.go exec")
+	fmt.Println("  EXECMCP_MCP_LIST_TYPE=commands go run cmd/mcptest/main.go list-commands")
+	fmt.Println("  EXECMCP_MCP_SERVER_URL=http://localhost:8081/mcp/sse EXECMCP_MCP_HOST_ID=test-host go run cmd/mcptest/main.go exec")
 }
 
 func getTestConfig() TestConfig {
-	config := TestConfig{
-		ServerURL: getEnv("MCP_SERVER_URL", "http://localhost:8081/mcp/sse"),
-		HostID:    getEnv("MCP_HOST_ID", "test-host"),
-		Command:   getEnv("MCP_COMMAND", "whoami"),
-		UseShell:  getBoolEnv("MCP_USE_SHELL", false),
-		Timeout:   getIntEnv("MCP_TIMEOUT", 30),
+	cfg := TestConfig{
+		ServerURL: getEnv(envconfig.EnvMCPServerURL, "http://localhost:8081/mcp/sse"),
+		HostID:    getEnv(envconfig.EnvMCPHostID, "test-host"),
+		Command:   getEnv(envconfig.EnvMCPCommand, "whoami"),
+		UseShell:  getBoolEnv(envconfig.EnvMCPUseShell, false),
+		Timeout:   getIntEnv(envconfig.EnvMCPTimeout, 30),
 	}
 
-	argsStr := getEnv("MCP_ARGS", "")
+	argsStr := getEnv(envconfig.EnvMCPArgs, "")
 	if argsStr != "" {
 		// Simple parsing - in production you'd want something more robust
-		config.Args = []string{argsStr}
+		cfg.Args = []string{argsStr}
 	}
 
-	return config
+	return cfg
 }
 
 func getEnv(key, defaultValue string) string {
@@ -235,7 +236,7 @@ func testListCommands() {
 	listType := "all" // default
 	if len(os.Args) > 2 {
 		listType = os.Args[2]
-	} else if envType := os.Getenv("MCP_LIST_TYPE"); envType != "" {
+	} else if envType := os.Getenv(envconfig.EnvMCPListType); envType != "" {
 		listType = envType
 	}
 
@@ -506,12 +507,12 @@ func testExecScript() {
 	}
 
 	// Get script name from environment variable or use default
-	scriptName := getEnv("MCP_SCRIPT_NAME", "hello-world")
+	scriptName := getEnv(envconfig.EnvMCPScriptName, "hello-world")
 	fmt.Printf("\nAttempting to execute script: %s...\n", scriptName)
 
 	// Parse script parameters from environment variable
 	parameters := map[string]interface{}{}
-	if paramsStr := getEnv("MCP_SCRIPT_PARAMS", ""); paramsStr != "" {
+	if paramsStr := getEnv(envconfig.EnvMCPScriptParams, ""); paramsStr != "" {
 		if err := json.Unmarshal([]byte(paramsStr), &parameters); err != nil {
 			log.Printf("Failed to parse script parameters: %v", err)
 		}

@@ -24,7 +24,8 @@ ssh_hosts:
     addr: "10.0.1.22:22"
     user: "ec2-user"
     auth_method: "password"
-    password: "your-password"
+    # 推荐使用环境变量或密码文件引用，避免明文写入配置
+    password_env: "EXECMCP_STAGING_PASSWORD"
     known_hosts: "~/.ssh/known_hosts"
     max_sessions: 4
 

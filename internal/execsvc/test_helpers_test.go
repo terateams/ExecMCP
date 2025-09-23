@@ -10,8 +10,10 @@ import (
 	"github.com/terateams/ExecMCP/internal/ssh"
 )
 
+// testKnownHostsPath 指向仓库内的固定 known_hosts 文件，确保单测在无真实环境下也能通过校验。
 var testKnownHostsPath = filepath.Join("..", "testdata", ".ssh", "known_hosts_test")
 
+// newTestLogger 创建噪声最小的日志器，避免在测试输出中夹杂大量日志。
 func newTestLogger() logging.Logger {
 	return logging.NewLogger(config.LoggingConfig{
 		Level:  "error",
@@ -20,6 +22,8 @@ func newTestLogger() logging.Logger {
 	})
 }
 
+// newBaseTestConfig 构造一份安全默认配置，覆盖 SSH 主机、白名单及日志设置。
+// 后续测试可以在此基础上按需修改，避免重复拼装配置。
 func newBaseTestConfig() *config.Config {
 	return &config.Config{
 		Server: config.ServerConfig{
@@ -55,6 +59,8 @@ func newBaseTestConfig() *config.Config {
 	}
 }
 
+// newTestServiceWithConfig 使用 Mock SSH 管理器构造 Service，
+// 通过 modify 回调让每个测试自由调整配置，同时保持安全过滤与日志实例一致。
 func newTestServiceWithConfig(t *testing.T, modify func(cfg *config.Config)) *Service {
 	t.Helper()
 
@@ -74,6 +80,8 @@ func newTestServiceWithConfig(t *testing.T, modify func(cfg *config.Config)) *Se
 	}
 }
 
+// newTestStreamManager 与 newTestServiceWithConfig 类似，用于构造 StreamManager，
+// 统一使用 mock 资源以便在本地、CI 等环境稳定运行。
 func newTestStreamManager(t *testing.T, modify func(cfg *config.Config)) *StreamManager {
 	t.Helper()
 
