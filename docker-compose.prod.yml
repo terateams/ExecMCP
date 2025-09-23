@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  execmcp:
+    image: ghcr.io/terateams/execmcp:latest
+    container_name: execmcp-server-prod
+    restart: unless-stopped
+    ports:
+      - "7458:7458"
+    environment:
+      # 生产环境配置
+      - EXECMCP_SERVER_LOG_LEVEL=info
+      - EXECMCP_SERVER_BIND_ADDR=0.0.0.0:7458
+      # 安全配置 (可选)
+      - EXECMCP_SECURITY_MAX_OUTPUT_BYTES=1048576
+      - EXECMCP_SECURITY_TIMEOUT_SEC=300
+      - EXECMCP_SECURITY_MAX_CONCURRENT=10
+    volumes:
+      # 配置文件挂载
+      - ./config.yaml:/etc/execmcp/config.yaml:ro
+      # SSH 密钥挂载 (生产环境推荐使用专用密钥)
+      - ./ssh:/etc/ssh/keys:ro
+      # known_hosts 文件挂载
+      - ./ssh/known_hosts:/etc/ssh/known_hosts:ro
+      # 日志目录挂载
+      - ./logs:/var/log/execmcp
+      # 数据目录挂载 (如果需要)
+      - ./data:/var/lib/execmcp
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7458/mcp/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - execmcp-network
+    # 安全设置
+    read_only: true
+    tmpfs:
+      - /tmp
+    user: "1000:1000"
+
+  # 可选：日志转发服务
+  log-rotate:
+    image: blacklabelops/logrotate
+    container_name: execmcp-logrotate
+    restart: unless-stopped
+    volumes:
+      - ./logs:/var/log/execmcp
+      - ./logrotate.conf:/etc/logrotate.conf:ro
+    depends_on:
+      - execmcp
+    networks:
+      - execmcp-network
+
+networks:
+  execmcp-network:
+    driver: bridge
+
+volumes:
+  execmcp-logs:
+  execmcp-data:

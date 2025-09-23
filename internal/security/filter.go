@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
 )
 
 // Filter 安全过滤器
 type Filter struct {
 	config         *config.SecurityConfig
+	logger         logging.Logger
 	denylistRegex  []compiledPattern
 	argDenyRegex   []compiledPattern
 	allowlistRegex []compiledPattern
@@ -42,13 +44,22 @@ type ExecOptions struct {
 }
 
 // NewFilter 创建新的安全过滤器
-func NewFilter(cfg *config.SecurityConfig) *Filter {
+func NewFilter(cfg *config.SecurityConfig, logger logging.Logger) *Filter {
 	return &Filter{
 		config:         cfg,
+		logger:         logger,
 		denylistRegex:  compilePatterns(cfg.DenylistRegex),
 		argDenyRegex:   compilePatterns(cfg.ArgDenyRegex),
 		allowlistRegex: compilePatterns(cfg.AllowlistRegex),
 	}
+}
+
+func (f *Filter) logSecurityDeny(reason string, keyvals ...interface{}) {
+	if f.logger == nil {
+		return
+	}
+	fields := append([]interface{}{"reason", reason}, keyvals...)
+	f.logger.Warn("安全策略拒绝", fields...)
 }
 
 // Check 按照配置逐层校验命令：先阻断黑名单、危险参数，再根据 shell 使用约束及白名单决定是否放行。
@@ -64,6 +75,10 @@ func (f *Filter) Check(req ExecRequest) error {
 	// 2. 检查精确黑名单
 	for _, deniedCmd := range f.config.DenylistExact {
 		if req.Command == deniedCmd {
+			f.logSecurityDeny("denylist_exact",
+				"command", req.Command,
+				"host_id", req.HostID,
+			)
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 被安全规则禁止", req.Command),
@@ -78,6 +93,11 @@ func (f *Filter) Check(req ExecRequest) error {
 	// 3. 检查正则黑名单
 	for _, pattern := range f.denylistRegex {
 		if pattern.re.MatchString(req.Command) {
+			f.logSecurityDeny("denylist_regex",
+				"command", req.Command,
+				"pattern", pattern.pattern,
+				"host_id", req.HostID,
+			)
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 匹配禁止模式 '%s'", req.Command, pattern.pattern),
@@ -94,6 +114,12 @@ func (f *Filter) Check(req ExecRequest) error {
 	for _, arg := range req.Args {
 		for _, pattern := range f.argDenyRegex {
 			if pattern.re.MatchString(arg) {
+				f.logSecurityDeny("arg_deny_regex",
+					"command", req.Command,
+					"argument", arg,
+					"pattern", pattern.pattern,
+					"host_id", req.HostID,
+				)
 				return &SecurityError{
 					Code:    "SECURITY_DENY",
 					Message: fmt.Sprintf("参数 '%s' 匹配禁止模式 '%s'", arg, pattern.pattern),
@@ -119,6 +145,10 @@ func (f *Filter) Check(req ExecRequest) error {
 
 	// 如果命令必须使用 shell但没有启用 shell，则拒绝
 	if requiresShell && !req.Options.UseShell {
+		f.logSecurityDeny("shell_required",
+			"command", req.Command,
+			"host_id", req.HostID,
+		)
 		return &SecurityError{
 			Code:    "SECURITY_DENY",
 			Message: fmt.Sprintf("命令 '%s' 必须使用 shell 执行", req.Command),
@@ -142,6 +172,10 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 
 		if !allowed {
+			f.logSecurityDeny("shell_not_allowed",
+				"command", req.Command,
+				"host_id", req.HostID,
+			)
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 不允许使用 shell 执行", req.Command),
@@ -158,6 +192,12 @@ func (f *Filter) Check(req ExecRequest) error {
 		for _, arg := range req.Args {
 			for _, pattern := range dangerousPatterns {
 				if strings.Contains(arg, pattern) {
+					f.logSecurityDeny("shell_injection",
+						"command", req.Command,
+						"argument", arg,
+						"pattern", pattern,
+						"host_id", req.HostID,
+					)
 					return &SecurityError{
 						Code:    "SECURITY_DENY",
 						Message: fmt.Sprintf("Shell 参数包含危险字符 '%s' 在 '%s'", pattern, arg),
@@ -197,6 +237,10 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 
 		if !allowed {
+			f.logSecurityDeny("not_in_allowlist",
+				"command", req.Command,
+				"host_id", req.HostID,
+			)
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("命令 '%s' 不在允许列表中", req.Command),
@@ -219,6 +263,11 @@ func (f *Filter) Check(req ExecRequest) error {
 		}
 
 		if !cwdAllowed {
+			f.logSecurityDeny("working_dir_not_allowed",
+				"command", req.Command,
+				"cwd", req.Options.CWD,
+				"host_id", req.HostID,
+			)
 			return &SecurityError{
 				Code:    "SECURITY_DENY",
 				Message: fmt.Sprintf("工作目录 '%s' 不在允许列表中", req.Options.CWD),

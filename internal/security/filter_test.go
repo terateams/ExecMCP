@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/logging"
 )
 
 func TestFilter_Check_DenylistExact(t *testing.T) {
@@ -15,7 +16,7 @@ func TestFilter_Check_DenylistExact(t *testing.T) {
 		DenylistExact: []string{"rm", "dd", "mkfs", "shutdown", "reboot"},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试被禁止的命令
 	deniedCommands := []string{"rm", "dd", "mkfs", "shutdown", "reboot"}
@@ -66,7 +67,7 @@ func TestFilter_Check_DenylistRegex(t *testing.T) {
 		},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试正则拒绝的命令
 	testCases := []struct {
@@ -103,7 +104,7 @@ func TestFilter_Check_ArgDenyRegex(t *testing.T) {
 		AllowlistExact: []string{"rm"}, // 允许 rm 命令但限制参数
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试危险参数
 	testCases := []struct {
@@ -147,7 +148,7 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 		AllowlistRegex: []string{`^systemctl.*`, `^journalctl.*`},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试允许的命令
 	allowedCommands := []struct {
@@ -195,7 +196,7 @@ func TestFilter_Check_ShellUsage(t *testing.T) {
 		AllowlistExact: []string{"bash", "sh", "ls"},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试不允许使用 shell 的命令
 	testCases := []struct {
@@ -277,7 +278,7 @@ func TestFilter_Check_ShellInjection(t *testing.T) {
 		AllowlistExact: []string{"bash"},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试 shell 注入攻击
 	injectionPatterns := []struct {
@@ -329,7 +330,7 @@ func TestFilter_Check_WorkingDirectory(t *testing.T) {
 		AllowlistExact:  []string{"ls"},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试允许的工作目录
 	allowedDirs := []string{"/tmp", "/var/log", "/home/user", "/home/user/docs"}
@@ -368,7 +369,7 @@ func TestFilter_Check_WorkingDirectory(t *testing.T) {
 
 func TestFilter_Check_EmptyCommand(t *testing.T) {
 	cfg := &config.SecurityConfig{}
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	req := ExecRequest{
 		Command: "",
@@ -392,7 +393,7 @@ func TestFilter_Check_DefaultValues(t *testing.T) {
 		AllowlistExact: []string{"ls"},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	// 测试默认值应该被应用
 	req := ExecRequest{
@@ -427,7 +428,7 @@ func BenchmarkFilter_Check(b *testing.B) {
 		WorkingDirAllow: []string{"/tmp", "/var/log"},
 	}
 
-	filter := NewFilter(cfg)
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}))
 
 	req := ExecRequest{
 		Command: "ls",

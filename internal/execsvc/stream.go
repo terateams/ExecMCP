@@ -50,7 +50,7 @@ func NewStreamManagerWithManager(cfg *config.Config, logger logging.Logger, mana
 		config:     cfg,
 		logger:     logger,
 		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security),
+		filter:     security.NewFilter(&cfg.Security, logger),
 	}
 }
 

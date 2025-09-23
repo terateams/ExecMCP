@@ -81,6 +81,10 @@ ci: fmt vet test coverage
 # 开发前的快速检查
 pre-commit: fmt vet test-short
 
+tag:
+	@echo "🏷️  开始标签创建流程..."
+	@./scripts/tag.sh
+
 # 生产构建（添加优化）
 build-prod:
 	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-s -w' -o bin/mcpserver-linux ./cmd/mcpserver

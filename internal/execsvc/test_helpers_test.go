@@ -76,7 +76,7 @@ func newTestServiceWithConfig(t *testing.T, modify func(cfg *config.Config)) *Se
 		config:     cfg,
 		logger:     logger,
 		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security),
+		filter:     security.NewFilter(&cfg.Security, logger),
 	}
 }
 
@@ -97,6 +97,6 @@ func newTestStreamManager(t *testing.T, modify func(cfg *config.Config)) *Stream
 		config:     cfg,
 		logger:     logger,
 		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security),
+		filter:     security.NewFilter(&cfg.Security, logger),
 	}
 }

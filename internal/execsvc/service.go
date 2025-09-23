@@ -67,7 +67,7 @@ func NewService(cfg *config.Config, logger logging.Logger) (*Service, error) {
 		config:     cfg,
 		logger:     logger,
 		sshManager: ssh.NewManager(cfg, logger),
-		filter:     security.NewFilter(&cfg.Security),
+		filter:     security.NewFilter(&cfg.Security, logger),
 	}
 
 	logger.Info("命令执行服务初始化完成")

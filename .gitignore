@@ -63,3 +63,4 @@ __debug_*
 *.log
 .gocache
 testdata
+logs
