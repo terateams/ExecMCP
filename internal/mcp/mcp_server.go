@@ -248,7 +248,7 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
 	timeout := int(timeoutSec.(float64))
 
-	m.logger.Info("收到命令执行请求", "host_id", hostID, "command", command, "args", argsStr, "use_shell", useShell)
+	m.logger.Info("收到命令执行请求", "host_id", hostID, "command", command, "args_count", len(argsStr), "use_shell", useShell)
 
 	result, err := m.execService.ExecuteCommand(ctx, execsvc.ExecRequest{
 		HostID:  hostID,
@@ -314,7 +314,7 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
 	timeout := int(timeoutSec.(float64))
 
-	m.logger.Info("收到脚本执行请求", "host_id", hostID, "script_name", scriptName, "parameters", parameters)
+	m.logger.Info("收到脚本执行请求", "host_id", hostID, "script_name", scriptName, "parameter_count", len(parameters))
 
 	result, err := m.execService.ExecuteScript(ctx, execsvc.ScriptRequest{
 		HostID:     hostID,

@@ -260,7 +260,9 @@ func (m *RealManager) configurePrivateKey(sshConfig *ssh.ClientConfig, hostConfi
 	}
 
 	sshConfig.Auth = append(sshConfig.Auth, ssh.PublicKeys(signer))
-	m.logger.Debug("配置私钥认证成功", "host_id", hostConfig.ID, "key_path", keyPath)
+	// 避免在日志中暴露完整的私钥路径，仅记录文件名
+	keyName := filepath.Base(keyPath)
+	m.logger.Debug("配置私钥认证成功", "host_id", hostConfig.ID, "key_file", keyName)
 	return nil
 }
 
@@ -271,7 +273,7 @@ func (m *RealManager) configurePassword(sshConfig *ssh.ClientConfig, hostConfig 
 		if envKey := strings.TrimSpace(hostConfig.PasswordEnv); envKey != "" {
 			password = os.Getenv(envKey)
 			if strings.TrimSpace(password) == "" {
-				return fmt.Errorf("从环境变量 %s 读取密码失败", envKey)
+				return fmt.Errorf("从环境变量读取密码失败")
 			}
 		} else if filePath := strings.TrimSpace(hostConfig.PasswordFile); filePath != "" {
 			data, err := os.ReadFile(filePath)
@@ -280,7 +282,7 @@ func (m *RealManager) configurePassword(sshConfig *ssh.ClientConfig, hostConfig 
 			}
 			password = strings.TrimSpace(string(data))
 			if password == "" {
-				return fmt.Errorf("密码文件 %s 内容为空", filePath)
+				return fmt.Errorf("密码文件内容为空")
 			}
 		} else {
 			return fmt.Errorf("密码未配置")
@@ -403,7 +405,9 @@ func (s *RealSession) ExecuteCommand(command string, args []string) (string, err
 		cmd += " " + arg
 	}
 
-	s.connection.logger.Debug("执行SSH命令", "host_id", s.connection.HostID, "command", cmd)
+	// 创建脱敏的命令用于日志记录
+	sanitizedCmd := s.sanitizeCommandForLogging(cmd)
+	s.connection.logger.Debug("执行SSH命令", "host_id", s.connection.HostID, "command", sanitizedCmd)
 
 	// 执行命令并捕获输出
 	var stdout, stderr bytes.Buffer
@@ -417,10 +421,10 @@ func (s *RealSession) ExecuteCommand(command string, args []string) (string, err
 	if err != nil {
 		s.connection.logger.Error("命令执行失败",
 			"host_id", s.connection.HostID,
-			"command", cmd,
+			"command", sanitizedCmd,
 			"error", err,
-			"stderr", stderr.String())
-		return "", fmt.Errorf("命令执行失败: %w, stderr: %s", err, stderr.String())
+			"stderr_length", stderr.Len())
+		return "", fmt.Errorf("命令执行失败: %w", err)
 	}
 
 	// 合并stdout和stderr
@@ -431,10 +435,97 @@ func (s *RealSession) ExecuteCommand(command string, args []string) (string, err
 
 	s.connection.logger.Debug("命令执行成功",
 		"host_id", s.connection.HostID,
-		"command", cmd,
+		"command", sanitizedCmd,
 		"output_length", len(result))
 
 	return result, nil
+}
+
+// sanitizeCommandForLogging 对命令进行脱敏处理，避免在日志中暴露敏感参数
+func (s *RealSession) sanitizeCommandForLogging(cmd string) string {
+	// 将命令按空格分割，但保留引号内的内容
+	words := strings.Fields(cmd)
+	if len(words) == 0 {
+		return cmd
+	}
+
+	// 敏感参数关键词列表
+	sensitiveParams := []string{
+		"--password", "-p", "--passwd", "--pwd",
+		"--token", "--auth-token", "--bearer",
+		"--secret", "--key", "--auth", "--authorization",
+		"--private-key", "--passphrase", "--credentials",
+	}
+
+	// 敏感值检测关键词
+	sensitiveValueKeywords := []string{
+		"password", "passwd", "pwd", "token", "secret", "key", "auth",
+		"bearer", "credentials", "passphrase", "private",
+	}
+
+	var sanitized []string
+	sanitized = append(sanitized, words[0]) // 保留命令名
+
+	for i := 1; i < len(words); i++ {
+		word := strings.ToLower(words[i])
+		originalWord := words[i]
+
+		// 检查是否是敏感参数名
+		isSensitiveParam := false
+		for _, param := range sensitiveParams {
+			if word == strings.ToLower(param) {
+				isSensitiveParam = true
+				break
+			}
+			// 检查参数=值格式，如 --password=value
+			if strings.HasPrefix(word, strings.ToLower(param)+"=") {
+				// 分离参数名和值
+				parts := strings.SplitN(originalWord, "=", 2)
+				if len(parts) == 2 {
+					sanitized = append(sanitized, parts[0]+"=[REDACTED]")
+					isSensitiveParam = false // 已处理，不再作为独立参数处理
+					break
+				}
+			}
+		}
+
+		if isSensitiveParam {
+			sanitized = append(sanitized, originalWord) // 保留参数名
+			// 检查下一个参数是否是值
+			if i+1 < len(words) && !strings.HasPrefix(words[i+1], "-") {
+				sanitized = append(sanitized, "[REDACTED]") // 替换敏感值
+				i++ // 跳过下一个单词
+			}
+		} else {
+			// 检查是否已处理过参数=值格式
+			alreadyProcessed := false
+			for _, param := range sensitiveParams {
+				if strings.HasPrefix(word, strings.ToLower(param)+"=") {
+					alreadyProcessed = true
+					break
+				}
+			}
+
+			if !alreadyProcessed {
+				// 检查当前词是否包含敏感关键词
+				containsSensitive := false
+				for _, keyword := range sensitiveValueKeywords {
+					if strings.Contains(word, keyword) {
+						containsSensitive = true
+						break
+					}
+				}
+
+				if containsSensitive {
+					sanitized = append(sanitized, "[REDACTED]")
+				} else {
+					sanitized = append(sanitized, originalWord)
+				}
+			}
+		}
+	}
+
+	return strings.Join(sanitized, " ")
 }
 
 // Close 关闭会话
