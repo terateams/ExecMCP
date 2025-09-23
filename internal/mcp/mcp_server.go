@@ -90,8 +90,9 @@ func (m *MCPServer) registerTools() {
 		),
 		mcp.WithString("command",
 			mcp.Required(),
-			mcp.Description("The exact command string to execute on the remote host"),
+			mcp.Description("Executable name (no arguments); pass flags/parameters via the args array"),
 		),
+
 		mcp.WithArray("args",
 			mcp.Description("Optional array of command arguments to pass to the command"),
 			mcp.WithStringItems(mcp.Description("Command argument")),

@@ -216,6 +216,54 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 	}
 }
 
+func TestFilter_Check_DockerLogsCommand(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		AllowlistExact: []string{"docker"},
+		AllowShellFor:  []string{"bash", "sh"},
+	}
+
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
+
+	dockerArgs := []string{"logs", "--tail", "50", "$(docker", "ps", "-q)"}
+
+	t.Run("without shell passes", func(t *testing.T) {
+		req := ExecRequest{
+			Command: "docker",
+			Args:    dockerArgs,
+			Options: ExecOptions{UseShell: false},
+		}
+
+		if err := filter.Check(context.Background(), req); err != nil {
+			t.Fatalf("期望命令在非 shell 模式下通过检查，但被拒绝: %v", err)
+		}
+	})
+
+	t.Run("via shell command passes", func(t *testing.T) {
+		req := ExecRequest{
+			Command: "sh",
+			Args:    []string{"-c", "docker logs --tail 50 $(docker ps -q)"},
+			Options: ExecOptions{UseShell: true},
+		}
+
+		if err := filter.Check(context.Background(), req); err != nil {
+			t.Fatalf("期望通过 shell 执行命令，但被拒绝: %v", err)
+		}
+	})
+
+	t.Run("shell on docker command denied", func(t *testing.T) {
+		req := ExecRequest{
+			Command: "docker",
+			Args:    dockerArgs,
+			Options: ExecOptions{UseShell: true},
+		}
+
+		err := filter.Check(context.Background(), req)
+		if err == nil {
+			t.Fatal("期望直接在 shell 模式下执行 docker 被拒绝，但通过了检查")
+		}
+	})
+}
+
 func TestFilter_Check_ShellUsage(t *testing.T) {
 	cfg := &config.SecurityConfig{
 		DefaultShell:   false,
