@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,6 +115,142 @@ func TestMCPServer_StartAndStop(t *testing.T) {
 	// 停止服务器
 	if err := server.Stop(); err != nil {
 		t.Errorf("服务器停止失败: %v", err)
+	}
+}
+
+func TestHandleExecCommandRejectsMixedCommandAndArgs(t *testing.T) {
+	mcpServer := &MCPServer{
+		config: &config.Config{},
+		logger: logging.NewLogger(config.LoggingConfig{}),
+		audit:  audit.NewNoopLogger(),
+	}
+
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Arguments: map[string]any{
+				"host_id": "test-host",
+				"command": "docker ps -a",
+			},
+		},
+	}
+
+	result, err := mcpServer.handleExecCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("期望返回工具错误结果，但得到执行错误: %v", err)
+	}
+	if result == nil {
+		t.Fatal("期望返回错误结果，但得到 nil")
+	}
+	if !result.IsError {
+		t.Fatal("期望 result 标记为错误，但 IsError=false")
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("期望返回错误信息内容，但 Content 为空")
+	}
+	if text, ok := mcplib.AsTextContent(result.Content[0]); ok {
+		if !strings.Contains(text.Text, "args") {
+			t.Fatalf("期望错误消息提示使用 args，但得到: %s", text.Text)
+		}
+	}
+}
+
+func TestHandleExecScriptRejectsMixedScriptName(t *testing.T) {
+	mcpServer := &MCPServer{
+		config: &config.Config{},
+		logger: logging.NewLogger(config.LoggingConfig{}),
+		audit:  audit.NewNoopLogger(),
+	}
+
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Arguments: map[string]any{
+				"host_id":     "test-host",
+				"script_name": "check_disk_usage --path=/",
+			},
+		},
+	}
+
+	result, err := mcpServer.handleExecScript(context.Background(), req)
+	if err != nil {
+		t.Fatalf("期望返回工具错误结果，但得到执行错误: %v", err)
+	}
+	if result == nil {
+		t.Fatal("期望返回错误结果，但得到 nil")
+	}
+	if !result.IsError {
+		t.Fatal("期望 result 标记为错误，但 IsError=false")
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("期望返回错误信息内容，但 Content 为空")
+	}
+	if text, ok := mcplib.AsTextContent(result.Content[0]); ok {
+		if !strings.Contains(text.Text, "parameters") {
+			t.Fatalf("期望错误消息提示使用 parameters，但得到: %s", text.Text)
+		}
+	}
+}
+
+func TestHandleListCommandsIncludesConfig(t *testing.T) {
+	cfg := &config.Config{
+		Security: config.SecurityConfig{
+			DefaultShell:   true,
+			AllowlistExact: []string{"ls", "docker"},
+			AllowlistRegex: []string{"^systemctl$"},
+			AllowShellFor:  []string{"bash"},
+			DenylistExact:  []string{"rm"},
+			DenylistRegex:  []string{".*sudo.*"},
+		},
+	}
+
+	mcpServer := &MCPServer{
+		config: cfg,
+		logger: logging.NewLogger(config.LoggingConfig{}),
+		audit:  audit.NewNoopLogger(),
+	}
+
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Arguments: map[string]any{"type": "commands"},
+		},
+	}
+
+	res, err := mcpServer.handleListCommands(context.Background(), req)
+	if err != nil {
+		t.Fatalf("期望无错误，结果得到: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("期望成功结果，得到: %+v", res)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(res)), &body); err != nil {
+		t.Fatalf("解析返回 JSON 失败: %v", err)
+	}
+
+	allowedRaw, ok := body["allowed_commands"].([]any)
+	if !ok {
+		t.Fatalf("期望 allowed_commands 为数组，得到: %T", body["allowed_commands"])
+	}
+
+	joined := make([]string, len(allowedRaw))
+	for i, v := range allowedRaw {
+		joined[i], _ = v.(string)
+	}
+	joinedStr := strings.Join(joined, "|")
+	for _, expected := range []string{"allowlist_exact: ls, docker", "allowlist_regex: ^systemctl$", "allow_shell_for: bash"} {
+		if !strings.Contains(joinedStr, expected) {
+			t.Fatalf("期望 allowed_commands 包含 %q，实际: %s", expected, joinedStr)
+		}
+	}
+
+	if value, ok := body["denylist_exact"].([]any); !ok || len(value) == 0 || value[0] != "rm" {
+		t.Fatalf("期望 denylist_exact 包含 rm，实际: %v", body["denylist_exact"])
+	}
+	if value, ok := body["denylist_regex"].([]any); !ok || len(value) == 0 || value[0] != ".*sudo.*" {
+		t.Fatalf("期望 denylist_regex 包含 .*sudo.*，实际: %v", body["denylist_regex"])
+	}
+	if val, ok := body["default_shell"].(bool); !ok || !val {
+		t.Fatalf("期望 default_shell=true，实际: %v", body["default_shell"])
 	}
 }
 

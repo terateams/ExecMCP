@@ -234,6 +234,20 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 		return mcp.NewToolResultError("host_id and command are required"), nil
 	}
 
+	if strings.ContainsAny(command, " \t\r\n") {
+		m.logAudit(ctx, audit.Event{
+			Category: "exec_command",
+			Type:     "invalid_request",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityLow,
+			Reason:   "command contains whitespace",
+			Metadata: map[string]interface{}{
+				"command": command,
+			},
+		})
+		return mcp.NewToolResultError("command must contain only the executable name; provide parameters via the args array"), nil
+	}
+
 	args := mcp.ParseArgument(req, "args", []interface{}{})
 	var argsStr []string
 	if argsSlice, ok := args.([]interface{}); ok {
@@ -310,6 +324,20 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("host_id and script_name are required"), nil
 	}
 
+	if strings.ContainsAny(scriptName, " \t\r\n") {
+		m.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "invalid_request",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityLow,
+			Reason:   "script_name contains whitespace",
+			Metadata: map[string]interface{}{
+				"script_name": scriptName,
+			},
+		})
+		return mcp.NewToolResultError("script_name must match a configured script; pass arguments via the parameters map"), nil
+	}
+
 	paramsAny := mcp.ParseArgument(req, "parameters", map[string]interface{}{})
 	parameters, _ := paramsAny.(map[string]interface{})
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
@@ -354,12 +382,16 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 	}
 	listType := mcp.ParseString(req, "type", "all")
 
-	allowedCommands := []string{
-		"信息查询: whoami, hostname, uname, pwd, ls, date",
-		"系统监控: top, htop, ps, df, du, free",
-		"网络工具: ping, netstat, ss, curl, wget",
-		"文件操作: cat, less, head, tail, grep, find",
-		"进程管理: systemctl, service, kill, pkill",
+	sec := m.config.Security
+	var allowedCommands []string
+	if len(sec.AllowlistExact) > 0 {
+		allowedCommands = append(allowedCommands, fmt.Sprintf("allowlist_exact: %s", strings.Join(sec.AllowlistExact, ", ")))
+	}
+	if len(sec.AllowlistRegex) > 0 {
+		allowedCommands = append(allowedCommands, fmt.Sprintf("allowlist_regex: %s", strings.Join(sec.AllowlistRegex, ", ")))
+	}
+	if len(sec.AllowShellFor) > 0 {
+		allowedCommands = append(allowedCommands, fmt.Sprintf("allow_shell_for: %s", strings.Join(sec.AllowShellFor, ", ")))
 	}
 
 	response := map[string]interface{}{
@@ -375,6 +407,13 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 
 	if listType == "all" || listType == "commands" {
 		response["allowed_commands"] = allowedCommands
+		if len(sec.DenylistExact) > 0 {
+			response["denylist_exact"] = append([]string(nil), sec.DenylistExact...)
+		}
+		if len(sec.DenylistRegex) > 0 {
+			response["denylist_regex"] = append([]string(nil), sec.DenylistRegex...)
+		}
+		response["default_shell"] = sec.DefaultShell
 	}
 
 	if listType == "all" || listType == "scripts" {
