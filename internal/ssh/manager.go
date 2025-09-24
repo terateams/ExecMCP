@@ -27,7 +27,7 @@ type Manager interface {
 
 // Session SSH 会话接口
 type Session interface {
-	ExecuteCommand(command string, args []string) (string, error)
+	ExecuteCommand(command string, args []string, enablePTY bool) (string, error)
 	Close()
 }
 
@@ -389,7 +389,7 @@ func (m *RealManager) HealthCheck(hostID string) error {
 }
 
 // ExecuteCommand 执行命令
-func (s *RealSession) ExecuteCommand(command string, args []string) (string, error) {
+func (s *RealSession) ExecuteCommand(command string, args []string, enablePTY bool) (string, error) {
 	if s.closed {
 		return "", fmt.Errorf("会话已关闭")
 	}
@@ -404,6 +404,22 @@ func (s *RealSession) ExecuteCommand(command string, args []string) (string, err
 	}
 
 	s.connection.logger.Debug("执行SSH命令", "host_id", s.connection.HostID, "command", cmd)
+
+	// 如果需要，先申请 PTY
+	if enablePTY {
+		modes := ssh.TerminalModes{
+			ssh.ECHO:          1,
+			ssh.TTY_OP_ISPEED: 14400,
+			ssh.TTY_OP_OSPEED: 14400,
+		}
+		if err := s.session.RequestPty("xterm", 80, 24, modes); err != nil {
+			s.connection.logger.Error("请求 PTY 失败",
+				"host_id", s.connection.HostID,
+				"command", cmd,
+				"error", err)
+			return "", fmt.Errorf("请求 PTY 失败: %w", err)
+		}
+	}
 
 	// 执行命令并捕获输出
 	var stdout, stderr bytes.Buffer
@@ -423,9 +439,9 @@ func (s *RealSession) ExecuteCommand(command string, args []string) (string, err
 		return "", fmt.Errorf("命令执行失败: %w, stderr: %s", err, stderr.String())
 	}
 
-	// 合并stdout和stderr
+	// 合并stdout和stderr；对于 PTY 模式，stderr 会自动与 stdout 合并
 	result := stdout.String()
-	if stderr.Len() > 0 {
+	if !enablePTY && stderr.Len() > 0 {
 		result += "\n" + stderr.String()
 	}
 

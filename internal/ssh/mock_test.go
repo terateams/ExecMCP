@@ -263,7 +263,7 @@ func TestMockSession_ExecuteCommand(t *testing.T) {
 	mockSession := session.(*MockSession)
 
 	// 测试执行命令
-	output, err := mockSession.ExecuteCommand("echo", []string{"hello", "world"})
+	output, err := mockSession.ExecuteCommand("echo", []string{"hello", "world"}, false)
 	if err != nil {
 		t.Fatalf("期望执行命令成功，但得到错误: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestMockSession_ExecuteCommand(t *testing.T) {
 
 	// 测试关闭会话后执行命令
 	mockSession.Close()
-	_, err = mockSession.ExecuteCommand("echo", []string{"test"})
+	_, err = mockSession.ExecuteCommand("echo", []string{"test"}, false)
 	if err == nil {
 		t.Fatal("期望关闭会话后执行命令失败，但成功了")
 	}
@@ -349,7 +349,7 @@ func TestMockManager_ConcurrentAccess(t *testing.T) {
 			}
 
 			// 模拟使用会话
-			output, err := session.ExecuteCommand("echo", []string{"test", strconv.Itoa(id)})
+			output, err := session.ExecuteCommand("echo", []string{"test", strconv.Itoa(id)}, false)
 			if err != nil {
 				t.Errorf("并发执行命令失败 #%d: %v", id, err)
 				return

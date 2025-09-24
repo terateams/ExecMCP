@@ -82,8 +82,8 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 
 // registerTools 注册 MCP 工具
 func (m *MCPServer) registerTools() {
-	execCommandTool := mcp.NewTool("exec_command",
-		mcp.WithDescription("Execute a command on remote host"),
+		execCommandTool := mcp.NewTool("exec_command",
+			mcp.WithDescription("Execute a command on remote host"),
 		mcp.WithString("host_id",
 			mcp.Required(),
 			mcp.Description("The unique identifier of the remote host on which the command should run"),
@@ -97,9 +97,12 @@ func (m *MCPServer) registerTools() {
 			mcp.Description("Optional array of command arguments to pass to the command"),
 			mcp.WithStringItems(mcp.Description("Command argument")),
 		),
-		mcp.WithBoolean("use_shell",
-			mcp.Description("Whether to execute the command through a shell (default: false)"),
-		),
+			mcp.WithBoolean("use_shell",
+				mcp.Description("Whether to execute the command through a shell (default: false)"),
+			),
+			mcp.WithBoolean("enable_pty",
+				mcp.Description("Whether to request a pseudo-terminal (PTY) for the command; defaults to server policy"),
+			),
 		mcp.WithString("working_dir",
 			mcp.Description("Working directory to execute the command in (optional)"),
 		),
@@ -113,8 +116,8 @@ func (m *MCPServer) registerTools() {
 	m.server.AddTool(execCommandTool, m.handleExecCommand)
 
 	// 注册 exec_script 工具
-	execScriptTool := mcp.NewTool("exec_script",
-		mcp.WithDescription("Execute a predefined script"),
+		execScriptTool := mcp.NewTool("exec_script",
+			mcp.WithDescription("Execute a predefined script"),
 		mcp.WithString("host_id",
 			mcp.Required(),
 			mcp.Description("The unique identifier of the remote host on which the script should run"),
@@ -126,9 +129,12 @@ func (m *MCPServer) registerTools() {
 		mcp.WithObject("parameters",
 			mcp.Description("Key-value pairs of script parameters (optional)"),
 		),
-		mcp.WithNumber("timeout_sec",
-			mcp.Description("Timeout in seconds for script execution (default: 30)"),
-		),
+			mcp.WithNumber("timeout_sec",
+				mcp.Description("Timeout in seconds for script execution (default: 30)"),
+			),
+			mcp.WithBoolean("enable_pty",
+				mcp.Description("Whether to request a pseudo-terminal (PTY) when executing the script"),
+			),
 		mcp.WithString("auth_token",
 			mcp.Description("Server auth token (if configured)"),
 		),
@@ -258,12 +264,14 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
+	defaultPTY := m.config.Security.EnablePTY
 	useShell := mcp.ParseBoolean(req, "use_shell", false)
+	enablePTY := mcp.ParseBoolean(req, "enable_pty", defaultPTY)
 	workingDir := mcp.ParseString(req, "working_dir", "")
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
 	timeout := int(timeoutSec.(float64))
 
-	m.logger.Info("收到命令执行请求", "host_id", hostID, "command", command, "args", argsStr, "use_shell", useShell)
+	m.logger.Info("收到命令执行请求", "host_id", hostID, "command", command, "args", argsStr, "use_shell", useShell, "enable_pty", enablePTY)
 
 	result, err := m.execService.ExecuteCommand(ctx, execsvc.ExecRequest{
 		HostID:  hostID,
@@ -271,9 +279,10 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 		Args:    argsStr,
 		Options: execsvc.ExecOptions{
 			UseShell:   useShell,
+			EnablePTY: enablePTY,
 			CWD:        workingDir,
 			TimeoutSec: timeout,
-		},
+			},
 	})
 
 	if err != nil {
@@ -342,8 +351,9 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 	parameters, _ := paramsAny.(map[string]interface{})
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
 	timeout := int(timeoutSec.(float64))
+	enablePTY := mcp.ParseBoolean(req, "enable_pty", m.config.Security.EnablePTY)
 
-	m.logger.Info("收到脚本执行请求", "host_id", hostID, "script_name", scriptName, "parameters", parameters)
+	m.logger.Info("收到脚本执行请求", "host_id", hostID, "script_name", scriptName, "parameters", parameters, "enable_pty", enablePTY)
 
 	result, err := m.execService.ExecuteScript(ctx, execsvc.ScriptRequest{
 		HostID:     hostID,
@@ -351,6 +361,7 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 		Parameters: parameters,
 		Options: execsvc.ExecOptions{
 			TimeoutSec: timeout,
+			EnablePTY:  enablePTY,
 		},
 	})
 

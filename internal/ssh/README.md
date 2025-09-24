@@ -24,7 +24,7 @@ type Manager interface {
 ### Session 接口
 ```go
 type Session interface {
-    ExecuteCommand(command string, args []string) (string, error)
+    ExecuteCommand(command string, args []string, enablePTY bool) (string, error)
     Close()
 }
 ```

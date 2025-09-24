@@ -296,10 +296,11 @@ func (s *MockSession) Close() {
 }
 
 // ExecuteCommand 在会话中执行命令
-func (s *MockSession) ExecuteCommand(command string, args []string) (string, error) {
+func (s *MockSession) ExecuteCommand(command string, args []string, enablePTY bool) (string, error) {
 	if s.closed {
 		return "", errors.New("会话已关闭")
 	}
+	_ = enablePTY
 
 	// 构建完整命令
 	cmd := command

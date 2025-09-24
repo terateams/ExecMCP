@@ -163,6 +163,41 @@ func TestService_ExecuteScript_MissingRequiredParameters(t *testing.T) {
 	}
 }
 
+func TestService_ExecuteCommand_PTYDisabled(t *testing.T) {
+	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.Security.EnablePTY = false
+	})
+
+	_, err := svc.ExecuteCommand(context.Background(), ExecRequest{
+		HostID:  "test-host",
+		Command: "echo",
+		Args:    []string{"pty"},
+		Options: ExecOptions{EnablePTY: true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "不允许分配 PTY") {
+		t.Fatalf("期望禁用 PTY 时返回错误，但得到: %v", err)
+	}
+}
+
+func TestService_ExecuteCommand_PTYEnabled(t *testing.T) {
+	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.Security.EnablePTY = true
+	})
+
+	result, err := svc.ExecuteCommand(context.Background(), ExecRequest{
+		HostID:  "test-host",
+		Command: "echo",
+		Args:    []string{"pty"},
+		Options: ExecOptions{EnablePTY: true},
+	})
+	if err != nil {
+		t.Fatalf("期望启用 PTY 时执行成功，但得到错误: %v", err)
+	}
+	if result == nil || !strings.Contains(result.Stdout, "模拟输出") {
+		t.Fatalf("期望返回模拟输出，但得到: %+v", result)
+	}
+}
+
 func TestService_RenderTemplate(t *testing.T) {
 	svc := newTestServiceWithConfig(t, nil)
 

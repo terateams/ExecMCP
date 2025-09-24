@@ -78,6 +78,7 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 			Env:         req.Options.Env,
 			Stream:      req.Options.Stream,
 			MergeStderr: req.Options.MergeStderr,
+			EnablePTY:   req.Options.EnablePTY,
 		},
 	}
 

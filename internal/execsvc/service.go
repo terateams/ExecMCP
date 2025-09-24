@@ -53,6 +53,7 @@ type ExecOptions struct {
 	Env         map[string]string `json:"env"`
 	Stream      bool              `json:"stream"`
 	MergeStderr bool              `json:"merge_stderr"`
+	EnablePTY   bool              `json:"enable_pty"`
 }
 
 // ScriptRequest 脚本执行请求
@@ -106,6 +107,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"cwd":         req.Options.CWD,
 			"timeout_sec": req.Options.TimeoutSec,
 			"stream":      req.Options.Stream,
+			"enable_pty": req.Options.EnablePTY,
 		},
 	})
 
@@ -121,6 +123,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			Env:         req.Options.Env,
 			Stream:      req.Options.Stream,
 			MergeStderr: req.Options.MergeStderr,
+			EnablePTY:   req.Options.EnablePTY,
 		},
 	}
 
@@ -152,7 +155,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 	defer s.sshManager.ReleaseSession(req.HostID, session)
 
 	// 3. 执行命令
-	output, err := session.ExecuteCommand(req.Command, req.Args)
+	output, err := session.ExecuteCommand(req.Command, req.Args, req.Options.EnablePTY)
 	if err != nil {
 		s.logger.Error("命令执行失败",
 			"host_id", req.HostID,
@@ -212,6 +215,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"exit_code":   result.ExitCode,
 			"truncated":   result.Truncated,
 			"output_size": len(result.Stdout),
+			"enable_pty": req.Options.EnablePTY,
 		},
 	})
 
@@ -310,6 +314,7 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 				Env:         req.Options.Env,
 				Stream:      req.Options.Stream,
 				MergeStderr: req.Options.MergeStderr,
+				EnablePTY:   req.Options.EnablePTY,
 			},
 		}
 	} else {
@@ -325,6 +330,7 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 				Env:         req.Options.Env,
 				Stream:      req.Options.Stream,
 				MergeStderr: req.Options.MergeStderr,
+				EnablePTY:   req.Options.EnablePTY,
 			},
 		}
 	}

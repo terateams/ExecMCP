@@ -306,6 +306,33 @@ func TestFilter_Check_ShellUsage(t *testing.T) {
 	}
 }
 
+func TestFilter_Check_PTY(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		EnablePTY:     false,
+		AllowlistExact: []string{"ls"},
+	}
+
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
+
+	req := ExecRequest{
+		Command: "ls",
+		Options: ExecOptions{
+			EnablePTY: true,
+		},
+	}
+
+	if err := filter.Check(context.Background(), req); err == nil {
+		t.Fatal("期望在禁用 PTY 时被拒绝，但通过了检查")
+	}
+
+	cfg.EnablePTY = true
+	filter = NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
+
+	if err := filter.Check(context.Background(), req); err != nil {
+		t.Fatalf("期望启用 PTY 后通过检查，但被拒绝: %v", err)
+	}
+}
+
 func TestIsPathPrefix(t *testing.T) {
 	baseDir := t.TempDir()
 	childDir := filepath.Join(baseDir, "child", "nested")

@@ -44,6 +44,7 @@ type ExecOptions struct {
 	Env         map[string]string `json:"env"`
 	Stream      bool              `json:"stream"`
 	MergeStderr bool              `json:"merge_stderr"`
+	EnablePTY   bool              `json:"enable_pty"`
 }
 
 // NewFilter 创建新的安全过滤器
@@ -66,7 +67,7 @@ func (f *Filter) logSecurityDeny(ctx context.Context, rule, reason string, req E
 		metadata = map[string]interface{}{}
 	}
 
-	fields := []interface{}{"rule", rule, "reason", reason, "host_id", req.HostID, "command", req.Command}
+	fields := []interface{}{"rule", rule, "reason", reason, "host_id", req.HostID, "command", req.Command, "enable_pty", req.Options.EnablePTY}
 	for k, v := range metadata {
 		fields = append(fields, k, v)
 	}
@@ -80,6 +81,7 @@ func (f *Filter) logSecurityDeny(ctx context.Context, rule, reason string, req E
 			"use_shell":   req.Options.UseShell,
 			"cwd":         req.Options.CWD,
 			"timeout_sec": req.Options.TimeoutSec,
+			"enable_pty": req.Options.EnablePTY,
 		}
 		for k, v := range metadata {
 			auditMeta[k] = v
@@ -159,6 +161,19 @@ func (f *Filter) Check(ctx context.Context, req ExecRequest) error {
 	}
 
 	// 5. 检查 shell 使用限制
+	if req.Options.EnablePTY && !f.config.EnablePTY {
+		f.logSecurityDeny(ctx, "pty_not_allowed", "未启用 PTY 支持", req, nil)
+		return &SecurityError{
+			Code:    "SECURITY_DENY",
+			Message: "当前配置不允许分配 PTY",
+			Details: map[string]interface{}{
+				"rule":       "pty_not_allowed",
+				"enable_pty": req.Options.EnablePTY,
+				"config":     f.config.EnablePTY,
+			},
+		}
+	}
+
 	// 检查命令是否在必须使用 shell 的列表中
 	requiresShell := false
 	for _, shellCmd := range f.config.AllowShellFor {
