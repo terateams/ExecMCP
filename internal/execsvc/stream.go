@@ -145,7 +145,7 @@ func (sm *StreamManager) executeCommandAsync(ctx context.Context, stream *Comman
 		// 给一点时间让主函数返回流对象
 		time.Sleep(1 * time.Millisecond)
 
-		sm.logger.Info("开始生成流输出", "command", cmd, "total_length", len(cmd))
+		sm.logger.Info("开始生成流输出", "command_length", len(cmd), "total_length", len(cmd))
 
 		// 模拟输出分块生成
 		var output string
