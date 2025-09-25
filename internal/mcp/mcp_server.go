@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,19 +16,23 @@ import (
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/execsvc"
 	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/security"
 	"github.com/terateams/ExecMCP/internal/ssh"
 )
 
 // MCPServer MCP 服务器
 type MCPServer struct {
-	config      *config.Config
-	logger      logging.Logger
-	audit       audit.Logger
-	server      *server.MCPServer
-	sseServer   *server.SSEServer
-	execService *execsvc.Service
-	sshManager  ssh.Manager
+	config        *config.Config
+	logger        logging.Logger
+	audit         audit.Logger
+	server        *server.MCPServer
+	sseServer     *server.SSEServer
+	execService   *execsvc.Service
+	sshManager    ssh.Manager
+	tempApprovals *temporaryApprovalCache
 }
+
+type remoteAddrContextKey struct{}
 
 // NewMCPServer 创建新的 MCP 服务器
 func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.Logger) (*MCPServer, error) {
@@ -50,12 +56,13 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 	)
 
 	mcp := &MCPServer{
-		config:      cfg,
-		logger:      logger,
-		audit:       auditLogger,
-		server:      mcpServer,
-		execService: execService,
-		sshManager:  sshManager,
+		config:        cfg,
+		logger:        logger,
+		audit:         auditLogger,
+		server:        mcpServer,
+		execService:   execService,
+		sshManager:    sshManager,
+		tempApprovals: newTemporaryApprovalCache(logger, auditLogger),
 	}
 
 	// 注册工具
@@ -71,6 +78,13 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 		mcpServer,
 		server.WithBaseURL(baseURL),
 		server.WithStaticBasePath("/mcp"),
+		server.WithSSEContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			ip := remoteIPFromRequest(r)
+			if ip != "" {
+				ctx = context.WithValue(ctx, remoteAddrContextKey{}, ip)
+			}
+			return ctx
+		}),
 	)
 
 	logger.Info("MCP 服务器初始化完成",
@@ -82,8 +96,8 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 
 // registerTools 注册 MCP 工具
 func (m *MCPServer) registerTools() {
-		execCommandTool := mcp.NewTool("exec_command",
-			mcp.WithDescription("Execute a command on remote host"),
+	execCommandTool := mcp.NewTool("exec_command",
+		mcp.WithDescription("Execute a command on remote host"),
 		mcp.WithString("host_id",
 			mcp.Required(),
 			mcp.Description("The unique identifier of the remote host on which the command should run"),
@@ -97,12 +111,12 @@ func (m *MCPServer) registerTools() {
 			mcp.Description("Optional array of command arguments to pass to the command"),
 			mcp.WithStringItems(mcp.Description("Command argument")),
 		),
-			mcp.WithBoolean("use_shell",
-				mcp.Description("Whether to execute the command through a shell (default: false)"),
-			),
-			mcp.WithBoolean("enable_pty",
-				mcp.Description("Whether to request a pseudo-terminal (PTY) for the command; defaults to server policy"),
-			),
+		mcp.WithBoolean("use_shell",
+			mcp.Description("Whether to execute the command through a shell (default: false)"),
+		),
+		mcp.WithBoolean("enable_pty",
+			mcp.Description("Whether to request a pseudo-terminal (PTY) for the command; defaults to server policy"),
+		),
 		mcp.WithString("working_dir",
 			mcp.Description("Working directory to execute the command in (optional)"),
 		),
@@ -116,8 +130,8 @@ func (m *MCPServer) registerTools() {
 	m.server.AddTool(execCommandTool, m.handleExecCommand)
 
 	// 注册 exec_script 工具
-		execScriptTool := mcp.NewTool("exec_script",
-			mcp.WithDescription("Execute a predefined script"),
+	execScriptTool := mcp.NewTool("exec_script",
+		mcp.WithDescription("Execute a predefined script"),
 		mcp.WithString("host_id",
 			mcp.Required(),
 			mcp.Description("The unique identifier of the remote host on which the script should run"),
@@ -129,12 +143,12 @@ func (m *MCPServer) registerTools() {
 		mcp.WithObject("parameters",
 			mcp.Description("Key-value pairs of script parameters (optional)"),
 		),
-			mcp.WithNumber("timeout_sec",
-				mcp.Description("Timeout in seconds for script execution (default: 30)"),
-			),
-			mcp.WithBoolean("enable_pty",
-				mcp.Description("Whether to request a pseudo-terminal (PTY) when executing the script"),
-			),
+		mcp.WithNumber("timeout_sec",
+			mcp.Description("Timeout in seconds for script execution (default: 30)"),
+		),
+		mcp.WithBoolean("enable_pty",
+			mcp.Description("Whether to request a pseudo-terminal (PTY) when executing the script"),
+		),
 		mcp.WithString("auth_token",
 			mcp.Description("Server auth token (if configured)"),
 		),
@@ -175,6 +189,28 @@ func (m *MCPServer) registerTools() {
 		),
 	)
 	m.server.AddTool(listHostsTool, m.handleListHosts)
+
+	// 注册 approve_command 工具
+	approveCommandTool := mcp.NewTool("approve_command",
+		mcp.WithDescription("Temporarily approve a command for the invoking client"),
+		mcp.WithString("command",
+			mcp.Required(),
+			mcp.Description("Command name (exact match) to temporarily allow"),
+		),
+		mcp.WithNumber("duration_sec",
+			mcp.Description("Approval lifetime in seconds (default: 600)"),
+		),
+		mcp.WithNumber("max_uses",
+			mcp.Description("Maximum times the approval can be used before expiry (default: 1, 0 = unlimited)"),
+		),
+		mcp.WithString("notes",
+			mcp.Description("Optional notes or ticket reference for auditing"),
+		),
+		mcp.WithString("auth_token",
+			mcp.Description("Server auth token (if configured)"),
+		),
+	)
+	m.server.AddTool(approveCommandTool, m.handleApproveCommand)
 }
 
 // Start 启动 MCP 服务器
@@ -217,6 +253,13 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 	ctx = m.withAuditContext(ctx, "exec_command", req)
 	if err := m.checkAuth(ctx, req); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
+	}
+	identity := m.buildClientIdentity(ctx, req)
+	if identity.IsValid() {
+		if provider := newTemporaryApprovalProvider(m.tempApprovals, identity.Key()); provider != nil {
+			ctx = security.WithTemporaryApproval(ctx, provider)
+			m.logger.Debug("为请求注入临时批准上下文", "identity", identity.Key(), "ip", identity.IP, "client_id", identity.ClientID)
+		}
 	}
 	hostID := mcp.ParseString(req, "host_id", "")
 	command := mcp.ParseString(req, "command", "")
@@ -279,10 +322,10 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 		Args:    argsStr,
 		Options: execsvc.ExecOptions{
 			UseShell:   useShell,
-			EnablePTY: enablePTY,
+			EnablePTY:  enablePTY,
 			CWD:        workingDir,
 			TimeoutSec: timeout,
-			},
+		},
 	})
 
 	if err != nil {
@@ -562,6 +605,95 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 	return mcp.NewToolResultText(string(responseJson)), nil
 }
 
+func (m *MCPServer) handleApproveCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx = m.withAuditContext(ctx, "approve_command", req)
+	if err := m.checkAuth(ctx, req); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	identity := m.buildClientIdentity(ctx, req)
+	command := strings.TrimSpace(mcp.ParseString(req, "command", ""))
+
+	if command == "" {
+		m.logAudit(ctx, audit.Event{
+			Category: "temporary_approval",
+			Type:     "approve_command_failed",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   "missing command",
+		})
+		return mcp.NewToolResultError("command is required"), nil
+	}
+
+	duration := parseIntArgument(mcp.ParseArgument(req, "duration_sec", 600.0))
+	if duration <= 0 {
+		duration = 600
+	}
+	maxUses := parseIntArgument(mcp.ParseArgument(req, "max_uses", 1.0))
+	if maxUses < 0 {
+		maxUses = 0
+	}
+	notes := strings.TrimSpace(mcp.ParseString(req, "notes", ""))
+
+	if !identity.IsValid() {
+		m.logAudit(ctx, audit.Event{
+			Category: "temporary_approval",
+			Type:     "approve_command_failed",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   "unable to infer client identity",
+		})
+		return mcp.NewToolResultError("could not infer client identity from request"), nil
+	}
+	identityKey := identity.Key()
+
+	noteFields := map[string]any{
+		"client_ip": identity.IP,
+		"client_id": identity.ClientID,
+	}
+	if notes != "" {
+		noteFields["notes"] = notes
+	}
+
+	approvedBy := extractActorFromRequest(req)
+	entry := m.tempApprovals.approve(identityKey, command, time.Duration(duration)*time.Second, maxUses, approvedBy, noteFields)
+
+	m.logAudit(ctx, audit.Event{
+		Category: "temporary_approval",
+		Type:     "approve_command",
+		Outcome:  audit.OutcomeSuccess,
+		Severity: audit.SeverityInfo,
+		Actor:    approvedBy,
+		Target:   command,
+		Metadata: map[string]interface{}{
+			"client_ip":        identity.IP,
+			"client_id":        identity.ClientID,
+			"expires_at":       entry.expiresAt.Format(time.RFC3339),
+			"max_uses":         entry.maxUses,
+			"notes":            notes,
+			"identity_key":     identityKey,
+			"duration_seconds": duration,
+		},
+	})
+
+	response := map[string]any{
+		"identity":         identityKey,
+		"client_ip":        identity.IP,
+		"client_id":        identity.ClientID,
+		"command":          command,
+		"expires_at":       entry.expiresAt.Format(time.RFC3339),
+		"max_uses":         entry.maxUses,
+		"uses_consumed":    entry.useCount,
+		"duration_seconds": duration,
+	}
+	if notes != "" {
+		response["notes"] = notes
+	}
+
+	responseJSON, _ := json.MarshalIndent(response, "", "  ")
+	return mcp.NewToolResultText(string(responseJSON)), nil
+}
+
 func (m *MCPServer) checkAuth(ctx context.Context, req mcp.CallToolRequest) error {
 	expected := strings.TrimSpace(m.config.Server.AuthToken)
 	if expected == "" {
@@ -668,6 +800,106 @@ func extractSourceIPFromRequest(req mcp.CallToolRequest) string {
 	for _, key := range keys {
 		if value := strings.TrimSpace(req.Header.Get(key)); value != "" {
 			return value
+		}
+	}
+	return ""
+}
+
+func (m *MCPServer) buildClientIdentity(ctx context.Context, req mcp.CallToolRequest) clientIdentity {
+	ip := ""
+	if ctx != nil {
+		if value := ctx.Value(remoteAddrContextKey{}); value != nil {
+			if v, ok := value.(string); ok {
+				ip = v
+			}
+		}
+	}
+	if ip == "" {
+		ip = extractSourceIPFromRequest(req)
+	}
+	ip = sanitizeClientIPInput(ip)
+	clientID := extractClientIdentifier(req)
+	return clientIdentity{
+		IP:       normalizeIP(ip),
+		ClientID: clientID,
+	}
+}
+
+func remoteIPFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if forwarded := r.Header.Get("X-Forwarded-For"); strings.TrimSpace(forwarded) != "" {
+		return sanitizeClientIPInput(forwarded)
+	}
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func sanitizeClientIPInput(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	parts := strings.Split(input, ",")
+	if len(parts) > 0 {
+		input = strings.TrimSpace(parts[0])
+	}
+	return input
+}
+
+func parseIntArgument(value interface{}) int {
+	switch v := value.(type) {
+	case nil:
+		return 0
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case uint:
+		return int(v)
+	case uint64:
+		return int(v)
+	case string:
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			if parsed, err := strconv.Atoi(trimmed); err == nil {
+				return parsed
+			}
+		}
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			return int(parsed)
+		}
+	}
+	return 0
+}
+
+func extractClientIdentifier(req mcp.CallToolRequest) string {
+	if meta := req.Params.Meta; meta != nil && meta.AdditionalFields != nil {
+		for _, key := range []string{"client_id", "clientId", "client", "actor", "user", "username"} {
+			if value, ok := meta.AdditionalFields[key]; ok {
+				if str, ok := value.(string); ok {
+					if trimmed := strings.TrimSpace(str); trimmed != "" {
+						return trimmed
+					}
+				}
+			}
+		}
+	}
+	if req.Header != nil {
+		for _, key := range []string{"X-Client-Id", "X-Actor", "X-Requester"} {
+			if value := strings.TrimSpace(req.Header.Get(key)); value != "" {
+				return value
+			}
 		}
 	}
 	return ""

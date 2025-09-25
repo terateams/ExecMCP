@@ -81,7 +81,7 @@ func (f *Filter) logSecurityDeny(ctx context.Context, rule, reason string, req E
 			"use_shell":   req.Options.UseShell,
 			"cwd":         req.Options.CWD,
 			"timeout_sec": req.Options.TimeoutSec,
-			"enable_pty": req.Options.EnablePTY,
+			"enable_pty":  req.Options.EnablePTY,
 		}
 		for k, v := range metadata {
 			auditMeta[k] = v
@@ -262,6 +262,12 @@ func (f *Filter) Check(ctx context.Context, req ExecRequest) error {
 					allowed = true
 					break
 				}
+			}
+		}
+
+		if !allowed {
+			if provider := temporaryApprovalFromContext(ctx); provider != nil && provider.IsCommandApproved(ctx, req) {
+				allowed = true
 			}
 		}
 

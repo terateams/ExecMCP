@@ -361,8 +361,8 @@ func TestMCPServer_ToolsList(t *testing.T) {
 
 	// 检查工具是否正确注册
 	tools := server.server.ListTools()
-	if len(tools) != 5 {
-		t.Errorf("期望有 5 个工具，但得到 %d", len(tools))
+	if len(tools) != 6 {
+		t.Errorf("期望有 6 个工具，但得到 %d", len(tools))
 	}
 
 	// 检查工具名称
@@ -372,6 +372,7 @@ func TestMCPServer_ToolsList(t *testing.T) {
 		"list_commands":   false,
 		"test_connection": false,
 		"list_hosts":      false,
+		"approve_command": false,
 	}
 
 	for name := range tools {
@@ -428,8 +429,8 @@ func TestMCPServer_MissingSSHHosts(t *testing.T) {
 
 	// 应该仍然能注册工具
 	tools := server.server.ListTools()
-	if len(tools) != 5 {
-		t.Errorf("期望有 5 个工具，但得到 %d", len(tools))
+	if len(tools) != 6 {
+		t.Errorf("期望有 6 个工具，但得到 %d", len(tools))
 	}
 }
 
@@ -454,6 +455,83 @@ func TestMCPServer_SSEServerCreation(t *testing.T) {
 	// 检查 SSE 服务器配置
 	if server.sseServer == nil {
 		t.Fatal("期望 SSE 服务器不为 nil")
+	}
+}
+
+func TestHandleApproveCommandStoresApproval(t *testing.T) {
+	logger := logging.NewLogger(config.LoggingConfig{})
+	m := &MCPServer{
+		config:        &config.Config{},
+		logger:        logger,
+		audit:         audit.NewNoopLogger(),
+		tempApprovals: newTemporaryApprovalCache(logger, audit.NewNoopLogger()),
+	}
+
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Arguments: map[string]any{
+				"command":      "uname",
+				"duration_sec": 120,
+				"max_uses":     2,
+				"notes":        "ticket-123",
+			},
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), remoteAddrContextKey{}, "192.0.2.10")
+	res, err := m.handleApproveCommand(ctx, req)
+	if err != nil {
+		t.Fatalf("期望批准成功，得到错误: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("期望返回成功结果，得到: %+v", res)
+	}
+
+	identityKey := buildIdentityKey("192.0.2.10", "")
+	m.tempApprovals.mu.RLock()
+	entry := m.tempApprovals.entries[identityKey]["uname"]
+	m.tempApprovals.mu.RUnlock()
+	if entry == nil {
+		t.Fatalf("期望缓存中存在批准记录，但未找到")
+	}
+	if entry.maxUses != 2 {
+		t.Fatalf("期望 maxUses=2，实际 %d", entry.maxUses)
+	}
+	if entry.useCount != 0 {
+		t.Fatalf("期望 useCount 初始为 0，实际 %d", entry.useCount)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(res)), &payload); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if payload["identity"] != identityKey {
+		t.Fatalf("期望响应 identity 为 %s，实际 %v", identityKey, payload["identity"])
+	}
+	if payload["command"] != "uname" {
+		t.Fatalf("期望响应 command=uname，实际 %v", payload["command"])
+	}
+}
+
+func TestBuildClientIdentityPrefersContextIP(t *testing.T) {
+	m := &MCPServer{}
+	req := mcplib.CallToolRequest{
+		Header: http.Header{
+			"X-Forwarded-For": []string{"198.51.100.5"},
+		},
+		Params: mcplib.CallToolParams{
+			Meta: &mcplib.Meta{AdditionalFields: map[string]any{"client_id": "meta-client"}},
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), remoteAddrContextKey{}, "203.0.113.9:443")
+	identity := m.buildClientIdentity(ctx, req)
+
+	if identity.IP != "203.0.113.9" {
+		t.Fatalf("期望优先使用上下文中的 IP, 实际 %s", identity.IP)
+	}
+	if identity.ClientID != "meta-client" {
+		t.Fatalf("期望从 _meta 读取 client_id，实际 %s", identity.ClientID)
 	}
 }
 

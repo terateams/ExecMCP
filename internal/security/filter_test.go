@@ -216,6 +216,50 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 	}
 }
 
+func TestFilter_TemporaryApprovalBypassesAllowlist(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		AllowlistExact: []string{"ls"},
+	}
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
+	req := ExecRequest{Command: "tar"}
+
+	if err := filter.Check(context.Background(), req); err == nil {
+		t.Fatal("期望命令不在白名单时被拒绝")
+	}
+
+	provider := &stubApprovalProvider{allowedCmd: "tar", remainingApprovals: 1}
+	ctx := WithTemporaryApproval(context.Background(), provider)
+	if err := filter.Check(ctx, req); err != nil {
+		t.Fatalf("期望临时批准放行命令，但得到错误: %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("期望临时批准被调用一次，实际 %d", provider.calls)
+	}
+
+	// 批准已用尽，再次执行应该被拒绝
+	if err := filter.Check(ctx, req); err == nil {
+		t.Fatal("期望临时批准用尽后命令被拒绝")
+	}
+}
+
+type stubApprovalProvider struct {
+	allowedCmd         string
+	remainingApprovals int
+	calls              int
+}
+
+func (s *stubApprovalProvider) IsCommandApproved(_ context.Context, req ExecRequest) bool {
+	s.calls++
+	if req.Command != s.allowedCmd {
+		return false
+	}
+	if s.remainingApprovals <= 0 {
+		return false
+	}
+	s.remainingApprovals--
+	return true
+}
+
 func TestFilter_Check_DockerLogsCommand(t *testing.T) {
 	cfg := &config.SecurityConfig{
 		AllowlistExact: []string{"docker"},
@@ -308,7 +352,7 @@ func TestFilter_Check_ShellUsage(t *testing.T) {
 
 func TestFilter_Check_PTY(t *testing.T) {
 	cfg := &config.SecurityConfig{
-		EnablePTY:     false,
+		EnablePTY:      false,
 		AllowlistExact: []string{"ls"},
 	}
 
