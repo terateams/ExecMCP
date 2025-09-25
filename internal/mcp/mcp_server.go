@@ -201,7 +201,7 @@ func (m *MCPServer) registerTools() {
 			mcp.Description("Approval lifetime in seconds (default: 600)"),
 		),
 		mcp.WithNumber("max_uses",
-			mcp.Description("Maximum times the approval can be used before expiry (default: 1, 0 = unlimited)"),
+			mcp.Description("Maximum times the approval can be used before expiry (default: 0, 0 = unlimited)"),
 		),
 		mcp.WithString("notes",
 			mcp.Description("Optional notes or ticket reference for auditing"),
