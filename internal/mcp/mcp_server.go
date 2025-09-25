@@ -330,7 +330,7 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 
 	if err != nil {
 		m.logger.Error("命令执行失败", "error", err)
-		return mcp.NewToolResultError(fmt.Sprintf("Command execution failed: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("Command execution failed: %v. If this command is not on the allowlist, request approval via approve_command.", err)), nil
 	}
 
 	response := map[string]interface{}{
