@@ -3,6 +3,7 @@
 
 server:
   bind_addr: "127.0.0.1:7458"         # SSE 监听地址
+  public_base_url: "http://localhost:7458"  # 客户端访问服务器的基础 URL
   log_level: "info"                    # 日志级别: debug|info|warn|error
   max_concurrent: 32                   # 最大并发请求数
   request_timeout_sec: 30              # 默认请求超时时间

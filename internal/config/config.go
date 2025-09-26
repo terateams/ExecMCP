@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -26,6 +27,7 @@ type Config struct {
 // 定义 MCP 服务器的网络绑定、并发限制、超时等基本参数
 type ServerConfig struct {
 	BindAddr       string `yaml:"bind_addr"`           // 服务器监听地址，格式为 "host:port"
+	PublicBaseURL  string `yaml:"public_base_url"`     // 对外暴露的基础 URL，用于客户端连接
 	LogLevel       string `yaml:"log_level"`           // 日志级别：debug, info, warn, error
 	MaxConcurrent  int    `yaml:"max_concurrent"`      // 最大并发请求数，超过限制的请求将被排队或拒绝
 	RequestTimeout int    `yaml:"request_timeout_sec"` // 单个请求的超时时间（秒）
@@ -182,6 +184,9 @@ func setDefaults(config *Config) {
 	if config.Server.BindAddr == "" {
 		config.Server.BindAddr = "127.0.0.1:7458" // 默认监听本地端口 7458
 	}
+	if config.Server.PublicBaseURL == "" {
+		config.Server.PublicBaseURL = DefaultPublicBaseURL(config.Server.BindAddr)
+	}
 	if config.Server.LogLevel == "" {
 		config.Server.LogLevel = "info" // 默认日志级别为 info
 	}
@@ -322,6 +327,7 @@ func applyEnvOverrides(config *Config) {
 func applyServerEnvOverrides(config *Config) {
 	// 格式：EXECMCP_SERVER_<CONFIG_KEY>
 	setStringFromEnv(&config.Server.BindAddr, EnvServerBindAddr)
+	setStringFromEnv(&config.Server.PublicBaseURL, EnvServerPublicBaseURL)
 	setStringFromEnv(&config.Server.LogLevel, EnvServerLogLevel)
 	setIntFromEnv(&config.Server.MaxConcurrent, EnvServerMaxConcurrent)
 	setIntFromEnv(&config.Server.RequestTimeout, EnvServerRequestTimeoutSec)
@@ -419,6 +425,49 @@ func setIntFromEnv(target *int, envKey string) {
 	if val := common.GetEnvInt(envKey, 0); val != 0 {
 		*target = val
 	}
+}
+
+// DefaultPublicBaseURL derives a client-facing base URL from the provided bind address.
+// It normalizes unspecified or loopback hosts to localhost to improve compatibility.
+func DefaultPublicBaseURL(bindAddr string) string {
+	host := "localhost"
+	port := ""
+	if bindAddr != "" {
+		if h, p, err := net.SplitHostPort(bindAddr); err == nil {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				hostCandidate := normalizePublicHost(h)
+				if hostCandidate != "" {
+					host = hostCandidate
+				}
+			}
+			port = strings.TrimSpace(p)
+		} else {
+			trimmed := strings.TrimSpace(bindAddr)
+			if trimmed != "" {
+				host = normalizePublicHost(trimmed)
+			}
+		}
+	}
+	hostPart := host
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		hostPart = "[" + host + "]"
+	}
+	if port != "" {
+		return fmt.Sprintf("http://%s:%s", hostPart, port)
+	}
+	return fmt.Sprintf("http://%s", hostPart)
+}
+
+func normalizePublicHost(host string) string {
+	lower := strings.ToLower(host)
+	switch lower {
+	case "", "0.0.0.0", "::", "[::]":
+		return "localhost"
+	case "127.0.0.1":
+		return "localhost"
+	}
+	return host
 }
 
 // setInt64FromEnv 从环境变量设置int64值

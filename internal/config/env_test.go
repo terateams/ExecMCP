@@ -9,6 +9,7 @@ func TestApplyEnvOverrides_ServerConfig(t *testing.T) {
 	// 设置环境变量
 	testEnvVars := map[string]string{
 		"EXECMCP_SERVER_BIND_ADDR":           "0.0.0.0:8080",
+		"EXECMCP_SERVER_PUBLIC_BASE_URL":     "https://mcp.example.com",
 		"EXECMCP_SERVER_LOG_LEVEL":           "debug",
 		"EXECMCP_SERVER_MAX_CONCURRENT":      "64",
 		"EXECMCP_SERVER_REQUEST_TIMEOUT_SEC": "60",
@@ -39,6 +40,9 @@ func TestApplyEnvOverrides_ServerConfig(t *testing.T) {
 	// 验证环境变量覆盖
 	if config.Server.BindAddr != "0.0.0.0:8080" {
 		t.Errorf("期望 BindAddr = '0.0.0.0:8080', 得到 '%s'", config.Server.BindAddr)
+	}
+	if config.Server.PublicBaseURL != "https://mcp.example.com" {
+		t.Errorf("期望 PublicBaseURL = 'https://mcp.example.com', 得到 '%s'", config.Server.PublicBaseURL)
 	}
 	if config.Server.LogLevel != "debug" {
 		t.Errorf("期望 LogLevel = 'debug', 得到 '%s'", config.Server.LogLevel)
@@ -145,6 +149,28 @@ func TestApplyEnvOverrides_LoggingConfig(t *testing.T) {
 	}
 	if config.Logging.MaxAge != 30 {
 		t.Errorf("期望 MaxAge = 30, 得到 %d", config.Logging.MaxAge)
+	}
+}
+
+func TestDefaultPublicBaseURL(t *testing.T) {
+	cfg := &Config{
+		Server: ServerConfig{
+			BindAddr: "0.0.0.0:9000",
+		},
+	}
+	setDefaults(cfg)
+	if cfg.Server.PublicBaseURL != "http://localhost:9000" {
+		t.Fatalf("期望默认 PublicBaseURL 为 http://localhost:9000，实际 %s", cfg.Server.PublicBaseURL)
+	}
+
+	cfg = &Config{
+		Server: ServerConfig{
+			BindAddr: "192.168.1.10:8081",
+		},
+	}
+	setDefaults(cfg)
+	if cfg.Server.PublicBaseURL != "http://192.168.1.10:8081" {
+		t.Fatalf("期望 PublicBaseURL 继承实际地址，实际 %s", cfg.Server.PublicBaseURL)
 	}
 }
 

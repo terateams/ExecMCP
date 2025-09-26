@@ -8,6 +8,9 @@ package config
 // EnvServerBindAddr 服务器绑定地址
 const EnvServerBindAddr = "EXECMCP_SERVER_BIND_ADDR"
 
+// EnvServerPublicBaseURL 对外公开的基础 URL
+const EnvServerPublicBaseURL = "EXECMCP_SERVER_PUBLIC_BASE_URL"
+
 // EnvServerLogLevel 服务器日志级别
 const EnvServerLogLevel = "EXECMCP_SERVER_LOG_LEVEL"
 

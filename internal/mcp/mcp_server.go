@@ -69,10 +69,9 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 	mcp.registerTools()
 
 	// 创建 SSE 服务器
-	baseURL := fmt.Sprintf("http://%s", cfg.Server.BindAddr)
-	// Convert 127.0.0.1 to localhost for better client compatibility
-	if cfg.Server.BindAddr == "127.0.0.1:7458" {
-		baseURL = "http://localhost:7458"
+	baseURL := strings.TrimSpace(cfg.Server.PublicBaseURL)
+	if baseURL == "" {
+		baseURL = config.DefaultPublicBaseURL(cfg.Server.BindAddr)
 	}
 	mcp.sseServer = server.NewSSEServer(
 		mcpServer,
