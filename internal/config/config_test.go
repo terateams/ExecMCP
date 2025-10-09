@@ -35,7 +35,7 @@ ssh_hosts:
 security:
   - group: "default"
     default_shell: false
-    allow_shell_for: ["bash", "sh"]
+    allow_shell_for: ["bash"]
     denylist_exact: ["rm", "dd"]
     allowlist_exact: ["ls", "cat"]
     working_dir_allow: ["/tmp"]
@@ -131,8 +131,8 @@ logging:
 	if sec.DefaultShell {
 		t.Error("期望 DefaultShell 为 false")
 	}
-	if len(sec.AllowShellFor) != 2 {
-		t.Errorf("期望 AllowShellFor 有 2 个元素，但得到 %d", len(sec.AllowShellFor))
+	if len(sec.AllowShellFor) != 1 || sec.AllowShellFor[0] != "bash" {
+		t.Errorf("期望 AllowShellFor 仅包含 'bash'，但得到 %v", sec.AllowShellFor)
 	}
 	if len(sec.DenylistExact) != 2 {
 		t.Errorf("期望 DenylistExact 有 2 个元素，但得到 %d", len(sec.DenylistExact))
@@ -596,7 +596,7 @@ ssh_hosts:
 
 security:
   default_shell: false
-  allow_shell_for: ["bash", "sh"]
+  allow_shell_for: ["bash"]
   denylist_exact: ["rm", "dd", "mkfs"]
   allowlist_exact: ["ls", "cat", "grep", "find"]
   working_dir_allow: ["/tmp", "/var/log"]

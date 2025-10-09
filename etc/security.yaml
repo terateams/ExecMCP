@@ -1,7 +1,7 @@
 ---
 - group: "default"
   default_shell: false
-  allow_shell_for: ["bash", "sh"]
+  allow_shell_for: ["bash"]
   denylist_exact: ["rm", "reboot", "shutdown", "halt", "poweroff", "mkfs", "dd", "chmod", "chown"]
   denylist_regex:
     - "^rm\\..*"

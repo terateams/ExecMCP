@@ -1,6 +1,9 @@
 # ExecMCP Makefile
 .PHONY: help build clean test coverage lint fmt vet run dev
 
+GOCACHE ?= $(CURDIR)/.gocache
+export GOCACHE
+
 # 默认目标
 help:
 	@echo "可用命令:"

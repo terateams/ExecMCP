@@ -48,7 +48,7 @@ func newMCPTestConfig() *config.Config {
 			{
 				Group:           "default",
 				DefaultShell:    false,
-				AllowShellFor:   []string{"bash", "sh"},
+				AllowShellFor:   []string{"bash"},
 				AllowlistExact:  []string{"ls", "echo", "sh"},
 				AllowlistRegex:  []string{"^systemctl$"},
 				DenylistExact:   []string{"rm"},
@@ -280,7 +280,7 @@ func TestHandleListCommandsIncludesConfig(t *testing.T) {
 
 	req := mcplib.CallToolRequest{
 		Params: mcplib.CallToolParams{
-			Arguments: map[string]any{"type": "commands"},
+			Arguments: map[string]any{},
 		},
 	}
 
