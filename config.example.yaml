@@ -9,182 +9,24 @@ server:
   request_timeout_sec: 30              # 默认请求超时时间
   auth_token: "your-secret-token"      # 认证令牌（可选）
 
+# 可选：外部文件引用（相对或绝对路径），支持拆分大型配置
+# ssh_hosts_includes:
+#   - "configs/ssh_hosts/prod.yaml"
+
 # SSH 主机配置
-ssh_hosts:
-  - id: "prod-1"
-    addr: "10.0.0.11:22"
-    user: "ubuntu"
-    auth_method: "private_key"
-    private_key_path: "~/.ssh/id_rsa"
-    known_hosts: "~/.ssh/known_hosts"
-    connect_timeout_sec: 5
-    keepalive_sec: 30
-    max_sessions: 8
-
-  - id: "staging-1"
-    addr: "10.0.1.22:22"
-    user: "ec2-user"
-    auth_method: "password"
-    # 推荐使用环境变量或密码文件引用，避免明文写入配置
-    password_env: "EXECMCP_STAGING_PASSWORD"
-    known_hosts: "~/.ssh/known_hosts"
-    max_sessions: 4
-
-  - id: "dev-1"
-    addr: "192.168.1.100:22"
-    user: "devuser"
-    auth_method: "private_key"
-    private_key_path: "~/.ssh/id_ed25519"
-    known_hosts: "~/.ssh/known_hosts"
-    max_sessions: 2
+ssh_hosts: []
+ssh_hosts_includes:
+  - "etc/ssh_hosts.yaml"
 
 # 安全配置
-security:
-  default_shell: false                 # 默认不使用 shell
-  allow_shell_for: ["bash", "sh"]       # 允许使用 shell 的命令
-  denylist_exact: ["rm", "reboot", "shutdown", "halt", "poweroff", "mkfs", "dd", "chmod", "chown"]
-  denylist_regex:
-    - "^rm\\..*"                       # rm 命令的各种变体
-    - ".*;.*"                          # 命令串接（shell 模式时）
-    - ".*&&.*"                         # 逻辑与操作
-    - ".*\\|.*"                        # 管道操作
-    - ".*>.*"                          # 输出重定向
-    - ".*>>.*"                         # 输出追加
-  arg_deny_regex:
-    - "-{1,2}force"                   # force 参数
-    - "-{1,2}no-preserve-root"        # 不保留根目录
-    - "--recursive"                    # 递归操作
-    - "/dev/sd[a-z].*"                 # 块设备操作
-  allowlist_exact: ["ls", "cat", "tail", "head", "grep", "uname", "whoami", "uptime", "df", "du", "ps", "top", "netstat", "ss", "lsof"]
-  allowlist_regex:
-    - "^(systemctl|journalctl)$"
-    - "^(docker|kubectl)$"
-  working_dir_allow: ["/home", "/var/log", "/tmp", "/opt"]
-  max_output_bytes: 1048576            # 1MB 输出限制
-  enable_pty: false                    # 默认不分配 PTY
-  rate_limit_per_min: 120              # 每分钟速率限制
+security: []
+security_includes:
+  - "etc/security.yaml"
 
 # 定制脚本配置
-scripts:
-  # 磁盘使用情况检查脚本
-  - name: "check_disk_usage"
-    description: "检查磁盘使用情况，支持指定路径和阈值告警"
-    prompt: "检查指定路径的磁盘使用情况，如果使用率超过阈值则告警"
-    template: "df -h {path} | awk 'NR>1 && $5+0 > {threshold} {print $6 \": \" $5 \" 使用率过高 (\" $5 \")\"}'"
-    parameters:
-      - name: "path"
-        type: "string"
-        required: true
-        default: "/"
-        description: "要检查的路径"
-        validation: "^[a-zA-Z0-9/_-]+$"
-      - name: "threshold"
-        type: "integer"
-        required: false
-        default: 80
-        description: "使用率阈值百分比 (0-100)"
-        validation: "^[0-9]+$"
-    allowed_hosts: ["*"]
-    timeout_sec: 30
-    use_shell: true
-    working_dir: "/"
-
-  # 查找大文件脚本
-  - name: "find_large_files"
-    description: "在指定目录下查找大于指定大小的文件"
-    prompt: "在指定目录下查找大于指定大小的文件，并显示文件详细信息"
-    template: "find {directory} -type f -size +{size_min} -exec ls -lh {{}} \\;"
-    parameters:
-      - name: "directory"
-        type: "string"
-        required: true
-        default: "/var/log"
-        description: "搜索目录"
-        validation: "^[a-zA-Z0-9/_-]+$"
-      - name: "size_min"
-        type: "string"
-        required: false
-        default: "100M"
-        description: "最小文件大小 (支持 K/M/G)"
-        validation: "^[0-9]+[KMG]?$"
-    allowed_hosts: ["*"]
-    timeout_sec: 60
-    use_shell: true
-    working_dir: "/"
-
-  # 系统负载检查脚本
-  - name: "check_system_load"
-    description: "检查系统负载和进程信息"
-    prompt: "检查系统负载情况，显示 CPU 使用率、内存使用情况和 top 进程"
-    template: |
-      echo "=== 系统负载 ===" &&
-      uptime &&
-      echo -e "\n=== 内存使用 ===" &&
-      free -h &&
-      echo -e "\n=== CPU 使用率 ===" &&
-      top -bn1 | head -20
-    parameters: []
-    allowed_hosts: ["prod-*", "staging-*"]
-    timeout_sec: 15
-    use_shell: true
-    working_dir: "/"
-
-  # 日志分析脚本
-  - name: "analyze_logs"
-    description: "分析日志文件中的错误或特定模式"
-    prompt: "分析指定日志文件，查找包含特定模式的行，显示最近几小时的记录"
-    template: |
-      echo "=== 分析日志文件: {log_file} ===" &&
-      if [ -f "{log_file}" ]; then
-        find {log_file} -mtime -{hours}/24 -exec grep -h "{pattern}" {{}} \\; | tail -n {max_lines}
-      else
-        echo "日志文件不存在: {log_file}"
-      fi
-    parameters:
-      - name: "log_file"
-        type: "string"
-        required: true
-        description: "日志文件路径"
-        validation: "^[a-zA-Z0-9/_-]+\\.(log|txt)$"
-      - name: "pattern"
-        type: "string"
-        required: false
-        default: "ERROR"
-        description: "搜索模式"
-        validation: "^[a-zA-Z0-9_ -]+$"
-      - name: "hours"
-        type: "integer"
-        required: false
-        default: 24
-        description: "搜索最近几小时的日志"
-        validation: "^[0-9]+$"
-      - name: "max_lines"
-        type: "integer"
-        required: false
-        default: 50
-        description: "最大显示行数"
-        validation: "^[0-9]+$"
-    allowed_hosts: ["*"]
-    timeout_sec: 30
-    use_shell: true
-    working_dir: "/"
-
-  # 网络连接检查脚本
-  - name: "check_network_connections"
-    description: "检查网络连接状态和端口监听情况"
-    prompt: "检查网络连接状态，显示活跃连接和监听端口"
-    template: |
-      echo "=== 网络连接统计 ===" &&
-      ss -s &&
-      echo -e "\n=== TCP 连接 ===" &&
-      ss -tulpn | grep LISTEN &&
-      echo -e "\n=== 活跃连接 (前20个) ===" &&
-      ss -tupn | head -20
-    parameters: []
-    allowed_hosts: ["*"]
-    timeout_sec: 10
-    use_shell: true
-    working_dir: "/"
+scripts: []
+scripts_includes:
+  - "etc/scripts.yaml"
 
 # 日志配置
 logging:

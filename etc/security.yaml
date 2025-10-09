@@ -1,0 +1,69 @@
+---
+- group: "default"
+  default_shell: false
+  allow_shell_for: ["bash", "sh"]
+  denylist_exact: ["rm", "reboot", "shutdown", "halt", "poweroff", "mkfs", "dd", "chmod", "chown"]
+  denylist_regex:
+    - "^rm\\..*"
+    - ".*;.*"
+    - ".*&&.*"
+    - ".*\\|.*"
+    - ".*>.*"
+    - ".*>>.*"
+  arg_deny_regex:
+    - "-{1,2}force"
+    - "-{1,2}no-preserve-root"
+    - "--recursive"
+    - "/dev/sd[a-z].*"
+  allowlist_exact: ["ls", "cat", "tail", "head", "grep", "uname", "whoami", "uptime", "df", "du", "ps", "top", "netstat", "ss", "lsof", "sh"]
+  allowlist_regex: ["^(systemctl|journalctl)$", "^(docker|kubectl)$"]
+  working_dir_allow: ["/home", "/var/log", "/tmp", "/opt"]
+  max_output_bytes: 1048576
+  enable_pty: false
+  rate_limit_per_min: 120
+
+
+- group: "routeros"
+  default_shell: false
+  allow_shell_for: []
+  denylist_exact:
+    - "reboot"
+    - "shutdown"
+  denylist_regex:
+    - ".*remove.*"
+  arg_deny_regex:
+    - "private-key"
+    - "public-key"
+  allowlist_exact:
+    - "interface"
+    - "ip"
+    - "queue"
+    - "mangle"
+    - "service"
+    - "log"
+    - "ping"
+    - "traceroute"
+    - "tool"
+    - "caps-man"
+    - "wifi"
+    - "dhcp-server"
+    - "dhcp-client"
+    - "ppp"
+    - "l2tp"
+    - "sstp"
+    - "pptp"
+    - "ipsec"
+    - "bgp"
+    - "ospf"
+    - "rip"
+    - "vlan"
+    - "bridge"
+    - "bonding"
+    - "vrrp"
+  allowlist_regex:
+    - "^(interface|ip|queue|mangle|service|system|log|ping|traceroute|tool|caps-man|wifi|dhcp|ppp|ipsec|bgp|ospf|rip|vlan|bridge|bonding|vrrp)[\\s].*(print|monitor|get|stats)$"
+    - "^(interface|service|ip).*\\s+(enable|disable)$"
+  working_dir_allow: []
+  max_output_bytes: 262144
+  enable_pty: false
+  rate_limit_per_min: 60

@@ -5,34 +5,116 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
+	"github.com/terateams/ExecMCP/internal/execsvc"
 	"github.com/terateams/ExecMCP/internal/logging"
+	"github.com/terateams/ExecMCP/internal/ssh"
 	"github.com/terateams/ExecMCP/internal/testutils"
 )
 
-func TestNewMCPServer(t *testing.T) {
-	cfg := &config.Config{
+func newMCPTestConfig() *config.Config {
+	return &config.Config{
 		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:8080",
+			BindAddr: "127.0.0.1:7458",
 		},
 		SSHHosts: []config.SSHHost{
 			{
-				ID:         "test-host",
-				Addr:       "localhost:22",
-				User:       "testuser",
-				AuthMethod: "password",
-				Password:   "testpass",
+				ID:             "test-host",
+				Addr:           "localhost:22",
+				User:           "testuser",
+				AuthMethod:     "private_key",
+				PrivateKeyPath: "~/.ssh/id_rsa",
+				KnownHosts:     "~/.ssh/known_hosts",
+				SecurityGroup:  "default",
+				Type:           "linux",
+				Description:    "测试主机",
+				ScriptTags:     []string{"default", "ops"},
+				MaxSessions:    4,
+				ConnectTimeout: 5,
+				KeepaliveSec:   30,
+			},
+		},
+		Security: []config.SecurityConfig{
+			{
+				Group:           "default",
+				DefaultShell:    false,
+				AllowShellFor:   []string{"bash", "sh"},
+				AllowlistExact:  []string{"ls", "echo", "sh"},
+				AllowlistRegex:  []string{"^systemctl$"},
+				DenylistExact:   []string{"rm"},
+				DenylistRegex:   []string{".*sudo.*"},
+				WorkingDirAllow: []string{"/tmp"},
+				MaxOutputBytes:  1024 * 1024,
+				EnablePTY:       false,
+				RateLimitPerMin: 120,
+			},
+		},
+		Scripts: []config.ScriptConfig{
+			{
+				Name:         "echo-test",
+				Description:  "simple echo",
+				Prompt:       "echo something",
+				Template:     "echo hello",
+				AllowedHosts: []string{"*"},
+				UseShell:     true,
+				Tag:          "default",
 			},
 		},
 	}
+}
+
+func newMCPServerWithMockExec(t *testing.T) (*MCPServer, *config.Config, ssh.Manager) {
+	t.Helper()
+
+	cfg := newMCPTestConfig()
+	logger := logging.NewLogger(config.LoggingConfig{})
+	auditLogger := audit.NewNoopLogger()
+
+	svc, err := execsvc.NewService(cfg, logger, auditLogger)
+	if err != nil {
+		t.Fatalf("初始化执行服务失败: %v", err)
+	}
+
+	mockSSH := ssh.NewMockManager(cfg)
+	setUnexportedField(t, svc, "sshManager", mockSSH)
+
+	server := &MCPServer{
+		config:        cfg,
+		logger:        logger,
+		audit:         auditLogger,
+		execService:   svc,
+		sshManager:    mockSSH,
+		tempApprovals: newTemporaryApprovalCache(logger, auditLogger),
+	}
+
+	return server, cfg, mockSSH
+}
+
+func setUnexportedField(t *testing.T, target interface{}, field string, value interface{}) {
+	t.Helper()
+	v := reflect.ValueOf(target).Elem().FieldByName(field)
+	if !v.IsValid() {
+		t.Fatalf("未找到字段 %s", field)
+	}
+	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
+}
+
+func TestNewMCPServer(t *testing.T) {
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:8080"
+	cfg.SSHHosts[0].AuthMethod = "password"
+	cfg.SSHHosts[0].Password = "testpass"
+	cfg.SSHHosts[0].PrivateKeyPath = ""
 
 	logger := logging.NewLogger(cfg.Logging)
 
@@ -71,21 +153,11 @@ func TestNewMCPServer(t *testing.T) {
 }
 
 func TestMCPServer_StartAndStop(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0", // 使用 0 端口让系统分配
-		},
-		SSHHosts: []config.SSHHost{
-			{
-				ID:         "test-host",
-				Addr:       "localhost:22",
-				User:       "testuser",
-				AuthMethod: "password",
-				Password:   "testpass",
-			},
-		},
-	}
-
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
+	cfg.SSHHosts[0].AuthMethod = "password"
+	cfg.SSHHosts[0].Password = "testpass"
+	cfg.SSHHosts[0].PrivateKeyPath = ""
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
@@ -120,7 +192,7 @@ func TestMCPServer_StartAndStop(t *testing.T) {
 
 func TestHandleExecCommandRejectsMixedCommandAndArgs(t *testing.T) {
 	mcpServer := &MCPServer{
-		config: &config.Config{},
+		config: newMCPTestConfig(),
 		logger: logging.NewLogger(config.LoggingConfig{}),
 		audit:  audit.NewNoopLogger(),
 	}
@@ -156,7 +228,7 @@ func TestHandleExecCommandRejectsMixedCommandAndArgs(t *testing.T) {
 
 func TestHandleExecScriptRejectsMixedScriptName(t *testing.T) {
 	mcpServer := &MCPServer{
-		config: &config.Config{},
+		config: newMCPTestConfig(),
 		logger: logging.NewLogger(config.LoggingConfig{}),
 		audit:  audit.NewNoopLogger(),
 	}
@@ -191,16 +263,14 @@ func TestHandleExecScriptRejectsMixedScriptName(t *testing.T) {
 }
 
 func TestHandleListCommandsIncludesConfig(t *testing.T) {
-	cfg := &config.Config{
-		Security: config.SecurityConfig{
-			DefaultShell:   true,
-			AllowlistExact: []string{"ls", "docker"},
-			AllowlistRegex: []string{"^systemctl$"},
-			AllowShellFor:  []string{"bash"},
-			DenylistExact:  []string{"rm"},
-			DenylistRegex:  []string{".*sudo.*"},
-		},
-	}
+	cfg := newMCPTestConfig()
+	sec := &cfg.Security[0]
+	sec.DefaultShell = true
+	sec.AllowlistExact = []string{"ls", "docker"}
+	sec.AllowlistRegex = []string{"^systemctl$"}
+	sec.AllowShellFor = []string{"bash"}
+	sec.DenylistExact = []string{"rm"}
+	sec.DenylistRegex = []string{".*sudo.*"}
 
 	mcpServer := &MCPServer{
 		config: cfg,
@@ -252,12 +322,72 @@ func TestHandleListCommandsIncludesConfig(t *testing.T) {
 	if val, ok := body["default_shell"].(bool); !ok || !val {
 		t.Fatalf("期望 default_shell=true，实际: %v", body["default_shell"])
 	}
+
+	groupsRaw, ok := body["security_groups"].([]any)
+	if !ok || len(groupsRaw) == 0 {
+		t.Fatalf("期望 security_groups 返回至少一个分组，实际: %v", body["security_groups"])
+	}
+	groupInfo, _ := groupsRaw[0].(map[string]any)
+	if groupInfo["group"] != "default" {
+		t.Fatalf("期望 security_groups[0].group = default，实际: %v", groupInfo["group"])
+	}
+
+	scriptsRaw, ok := body["scripts"].([]any)
+	if !ok || len(scriptsRaw) == 0 {
+		t.Fatalf("期望 scripts 返回列表，实际: %v", body["scripts"])
+	}
+	scriptInfo, _ := scriptsRaw[0].(map[string]any)
+	if scriptInfo["tag"] != "default" {
+		t.Fatalf("期望脚本包含 tag 字段 'default'，实际: %v", scriptInfo["tag"])
+	}
+}
+
+func TestHandleListHostsIncludesMetadata(t *testing.T) {
+	mcpServer := &MCPServer{
+		config: newMCPTestConfig(),
+		logger: logging.NewLogger(config.LoggingConfig{}),
+		audit:  audit.NewNoopLogger(),
+	}
+
+	res, err := mcpServer.handleListHosts(context.Background(), mcplib.CallToolRequest{Params: mcplib.CallToolParams{Arguments: map[string]any{}}})
+	if err != nil {
+		t.Fatalf("期望列出主机成功，得到错误: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("期望成功结果，得到: %+v", res)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(res)), &body); err != nil {
+		t.Fatalf("解析返回 JSON 失败: %v", err)
+	}
+
+	hostsRaw, ok := body["hosts"].([]any)
+	if !ok || len(hostsRaw) == 0 {
+		t.Fatalf("期望 hosts 列表不为空，实际: %v", body["hosts"])
+	}
+	hostInfo, _ := hostsRaw[0].(map[string]any)
+	if hostInfo["type"] != "linux" {
+		t.Fatalf("期望 host type=linux，实际: %v", hostInfo["type"])
+	}
+	if hostInfo["description"] != "测试主机" {
+		t.Fatalf("期望 host description=测试主机，实际: %v", hostInfo["description"])
+	}
+	if hostInfo["security_group"] != "default" {
+		t.Fatalf("期望 security_group=default，实际: %v", hostInfo["security_group"])
+	}
+	scriptTags, ok := hostInfo["script_tags"].([]any)
+	if !ok || len(scriptTags) == 0 {
+		t.Fatalf("期望 script_tags 返回数组，实际: %v", hostInfo["script_tags"])
+	}
 }
 
 func TestCheckAuth_AuditOnFailure(t *testing.T) {
 	recorder := testutils.NewRecordingAuditLogger()
+	cfg := newMCPTestConfig()
+	cfg.Server.AuthToken = "secret"
 	mcpServer := &MCPServer{
-		config: &config.Config{Server: config.ServerConfig{AuthToken: "secret"}},
+		config: cfg,
 		logger: logging.NewLogger(config.LoggingConfig{}),
 		audit:  recorder,
 	}
@@ -280,21 +410,49 @@ func TestCheckAuth_AuditOnFailure(t *testing.T) {
 	}
 }
 
-func TestMCPServer_SSLEndpoint(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0",
-		},
-		SSHHosts: []config.SSHHost{
-			{
-				ID:         "test-host",
-				Addr:       "localhost:22",
-				User:       "testuser",
-				AuthMethod: "password",
-				Password:   "testpass",
-			},
-		},
+func TestHandleTestConnectionIncludesMetadata(t *testing.T) {
+	server, _, mockSSH := newMCPServerWithMockExec(t)
+	ctx := context.Background()
+	session, err := mockSSH.GetSession("test-host")
+	if err != nil {
+		t.Fatalf("预热 mock SSH 会话失败: %v", err)
 	}
+	mockSSH.ReleaseSession("test-host", session)
+
+	res, err := server.handleTestConnection(ctx, mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{Arguments: map[string]any{"host_id": "test-host"}},
+	})
+	if err != nil {
+		t.Fatalf("期望测试连接成功，得到错误: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("期望成功结果，得到: %+v", res)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(res)), &body); err != nil {
+		t.Fatalf("解析返回 JSON 失败: %v", err)
+	}
+	if body["host_type"] != "linux" {
+		t.Fatalf("期望响应包含 host_type=linux，实际: %v", body["host_type"])
+	}
+	if body["host_description"] != "测试主机" {
+		t.Fatalf("期望响应包含 host_description=测试主机，实际: %v", body["host_description"])
+	}
+	if body["security_group"] != "default" {
+		t.Fatalf("期望响应包含 security_group=default，实际: %v", body["security_group"])
+	}
+	if tags, ok := body["script_tags"].([]any); !ok || len(tags) == 0 {
+		t.Fatalf("期望响应包含 script_tags 数组，实际: %v", body["script_tags"])
+	}
+}
+
+func TestMCPServer_SSLEndpoint(t *testing.T) {
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
+	cfg.SSHHosts[0].AuthMethod = "password"
+	cfg.SSHHosts[0].Password = "testpass"
+	cfg.SSHHosts[0].PrivateKeyPath = ""
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -330,28 +488,89 @@ func TestMCPServer_SSLEndpoint(t *testing.T) {
 	}
 }
 
-func TestMCPServer_ToolsList(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0",
-		},
-		SSHHosts: []config.SSHHost{
-			{
-				ID:         "test-host",
-				Addr:       "localhost:22",
-				User:       "testuser",
-				AuthMethod: "password",
-				Password:   "testpass",
-			},
-		},
-		Scripts: []config.ScriptConfig{
-			{
-				Name:        "test-script",
-				Description: "测试脚本",
-				Template:    "echo 'test'",
+func TestHandleExecCommandIncludesHostMetadata(t *testing.T) {
+	server, _, _ := newMCPServerWithMockExec(t)
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Arguments: map[string]any{
+				"host_id": "test-host",
+				"command": "echo",
+				"args":    []any{"hello"},
 			},
 		},
 	}
+
+	res, err := server.handleExecCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("期望执行命令成功，得到错误: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("期望成功结果，得到: %+v", res)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(res)), &body); err != nil {
+		t.Fatalf("解析返回 JSON 失败: %v", err)
+	}
+	if body["host_type"] != "linux" {
+		t.Fatalf("期望响应包含 host_type=linux，实际: %v", body["host_type"])
+	}
+	if body["host_description"] != "测试主机" {
+		t.Fatalf("期望响应包含 host_description=测试主机，实际: %v", body["host_description"])
+	}
+	if body["security_group"] != "default" {
+		t.Fatalf("期望响应包含 security_group=default，实际: %v", body["security_group"])
+	}
+}
+
+func TestHandleExecScriptIncludesHostMetadata(t *testing.T) {
+	server, _, _ := newMCPServerWithMockExec(t)
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Arguments: map[string]any{
+				"host_id":     "test-host",
+				"script_name": "echo-test",
+			},
+		},
+	}
+
+	res, err := server.handleExecScript(context.Background(), req)
+	if err != nil {
+		t.Fatalf("期望执行脚本成功，得到错误: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("期望成功结果，得到: %+v", res)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(res)), &body); err != nil {
+		t.Fatalf("解析返回 JSON 失败: %v", err)
+	}
+	if body["host_type"] != "linux" {
+		t.Fatalf("期望响应包含 host_type=linux，实际: %v", body["host_type"])
+	}
+	if body["host_description"] != "测试主机" {
+		t.Fatalf("期望响应包含 host_description=测试主机，实际: %v", body["host_description"])
+	}
+	if body["security_group"] != "default" {
+		t.Fatalf("期望响应包含 security_group=default，实际: %v", body["security_group"])
+	}
+}
+
+func TestMCPServer_ToolsList(t *testing.T) {
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
+	cfg.SSHHosts[0].AuthMethod = "password"
+	cfg.SSHHosts[0].Password = "testpass"
+	cfg.SSHHosts[0].PrivateKeyPath = ""
+	cfg.Scripts = append(cfg.Scripts, config.ScriptConfig{
+		Name:         "test-script",
+		Description:  "测试脚本",
+		Template:     "echo 'test'",
+		AllowedHosts: []string{"*"},
+		UseShell:     true,
+		Tag:          "default",
+	})
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -389,11 +608,8 @@ func TestMCPServer_ToolsList(t *testing.T) {
 }
 
 func TestMCPServer_InvalidConfig(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "", // 空地址
-		},
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "" // 空地址
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -409,12 +625,9 @@ func TestMCPServer_InvalidConfig(t *testing.T) {
 }
 
 func TestMCPServer_MissingSSHHosts(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0",
-		},
-		SSHHosts: []config.SSHHost{}, // 空 SSH 主机列表
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
+	cfg.SSHHosts = []config.SSHHost{} // 空 SSH 主机列表
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -435,11 +648,8 @@ func TestMCPServer_MissingSSHHosts(t *testing.T) {
 }
 
 func TestMCPServer_SSEServerCreation(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:8080",
-		},
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:8080"
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -460,8 +670,9 @@ func TestMCPServer_SSEServerCreation(t *testing.T) {
 
 func TestHandleApproveCommandStoresApproval(t *testing.T) {
 	logger := logging.NewLogger(config.LoggingConfig{})
+	cfg := newMCPTestConfig()
 	m := &MCPServer{
-		config:        &config.Config{},
+		config:        cfg,
 		logger:        logger,
 		audit:         audit.NewNoopLogger(),
 		tempApprovals: newTemporaryApprovalCache(logger, audit.NewNoopLogger()),
@@ -536,11 +747,8 @@ func TestBuildClientIdentityPrefersContextIP(t *testing.T) {
 }
 
 func TestMCPServer_ContextCancellation(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0",
-		},
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -564,11 +772,8 @@ func TestMCPServer_ContextCancellation(t *testing.T) {
 }
 
 func TestMCPServer_MultipleStartStop(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0",
-		},
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -602,11 +807,8 @@ func TestMCPServer_MultipleStartStop(t *testing.T) {
 }
 
 func TestMCPServer_ToolHandlersExist(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr: "127.0.0.1:0",
-		},
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
@@ -626,21 +828,12 @@ func TestMCPServer_ToolHandlersExist(t *testing.T) {
 }
 
 func TestMCPServer_AuthTokenRequired(t *testing.T) {
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			BindAddr:  "127.0.0.1:0",
-			AuthToken: "secret-token",
-		},
-		SSHHosts: []config.SSHHost{
-			{
-				ID:         "test-host",
-				Addr:       "localhost:22",
-				User:       "testuser",
-				AuthMethod: "password",
-				Password:   "testpass",
-			},
-		},
-	}
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
+	cfg.Server.AuthToken = "secret-token"
+	cfg.SSHHosts[0].AuthMethod = "password"
+	cfg.SSHHosts[0].Password = "testpass"
+	cfg.SSHHosts[0].PrivateKeyPath = ""
 
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())

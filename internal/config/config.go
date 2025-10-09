@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/terateams/ExecMCP/internal/common"
@@ -15,12 +16,18 @@ import (
 // Config 主配置结构体，包含 ExecMCP 服务器的所有配置项
 // 这是整个配置系统的根结构，通过 YAML 文件进行配置
 type Config struct {
-	Server   ServerConfig       `yaml:"server"`        // 服务器基本配置
-	SSHHosts []SSHHost          `yaml:"ssh_hosts"`     // SSH 主机连接配置列表
-	Security SecurityConfig     `yaml:"security"`      // 安全过滤和访问控制配置
-	Scripts  []ScriptConfig     `yaml:"scripts"`       // 预定义脚本配置
-	Logging  LoggingConfig      `yaml:"logging"`       // 日志记录配置
-	Audit    AuditLoggingConfig `yaml:"audit_logging"` // 安全审计日志配置
+	Server           ServerConfig       `yaml:"server"`             // 服务器基本配置
+	SSHHosts         []SSHHost          `yaml:"ssh_hosts"`          // SSH 主机连接配置列表
+	SSHHostIncludes  []string           `yaml:"ssh_hosts_includes"` // 外部 SSH 主机配置文件
+	Security         []SecurityConfig   `yaml:"security"`           // 安全过滤和访问控制配置（按组划分）
+	SecurityIncludes []string           `yaml:"security_includes"`  // 外部安全策略配置文件
+	Scripts          []ScriptConfig     `yaml:"scripts"`            // 预定义脚本配置
+	ScriptIncludes   []string           `yaml:"scripts_includes"`   // 外部脚本配置文件
+	Logging          LoggingConfig      `yaml:"logging"`            // 日志记录配置
+	Audit            AuditLoggingConfig `yaml:"audit_logging"`      // 安全审计日志配置
+	// 以下字段为运行时索引，加速 host / security_group 查询
+	securityIndex map[string]*SecurityConfig `yaml:"-"`
+	hostIndex     map[string]*SSHHost        `yaml:"-"`
 }
 
 // ServerConfig 服务器基本配置
@@ -37,23 +44,28 @@ type ServerConfig struct {
 // SSHHost SSH 主机连接配置
 // 定义远程主机的连接信息、认证方式和连接参数
 type SSHHost struct {
-	ID             string `yaml:"id"`                  // 主机唯一标识符，用于在请求中指定目标主机
-	Addr           string `yaml:"addr"`                // 主机地址，格式为 "host:port"
-	User           string `yaml:"user"`                // SSH 登录用户名
-	AuthMethod     string `yaml:"auth_method"`         // 认证方式：private_key 或 password
-	PrivateKeyPath string `yaml:"private_key_path"`    // 私钥文件路径（支持 ~ 展开）
-	Password       string `yaml:"password"`            // 登录密码（仅用于密码认证，建议仅在开发环境使用）
-	PasswordEnv    string `yaml:"password_env"`        // 保存密码的环境变量名称（优先级高于 password）
-	PasswordFile   string `yaml:"password_file"`       // 保存密码的文件路径（次优先级，支持 ~ 展开）
-	KnownHosts     string `yaml:"known_hosts"`         // known_hosts 文件路径，用于主机密钥验证
-	ConnectTimeout int    `yaml:"connect_timeout_sec"` // SSH 连接超时时间（秒）
-	KeepaliveSec   int    `yaml:"keepalive_sec"`       // SSH keepalive 间隔时间（秒）
-	MaxSessions    int    `yaml:"max_sessions"`        // 该主机的最大并发会话数
+	ID             string   `yaml:"id"`                  // 主机唯一标识符，用于在请求中指定目标主机
+	Addr           string   `yaml:"addr"`                // 主机地址，格式为 "host:port"
+	User           string   `yaml:"user"`                // SSH 登录用户名
+	AuthMethod     string   `yaml:"auth_method"`         // 认证方式：private_key 或 password
+	PrivateKeyPath string   `yaml:"private_key_path"`    // 私钥文件路径（支持 ~ 展开）
+	Password       string   `yaml:"password"`            // 登录密码（仅用于密码认证，建议仅在开发环境使用）
+	PasswordEnv    string   `yaml:"password_env"`        // 保存密码的环境变量名称（优先级高于 password）
+	PasswordFile   string   `yaml:"password_file"`       // 保存密码的文件路径（次优先级，支持 ~ 展开）
+	KnownHosts     string   `yaml:"known_hosts"`         // known_hosts 文件路径，用于主机密钥验证
+	ConnectTimeout int      `yaml:"connect_timeout_sec"` // SSH 连接超时时间（秒）
+	KeepaliveSec   int      `yaml:"keepalive_sec"`       // SSH keepalive 间隔时间（秒）
+	MaxSessions    int      `yaml:"max_sessions"`        // 该主机的最大并发会话数
+	Type           string   `yaml:"type"`                // 主机类型：linux, macos, routeros
+	Description    string   `yaml:"description"`         // 主机描述信息，用于向客户端展示
+	SecurityGroup  string   `yaml:"security_group"`      // 关联的安全策略分组
+	ScriptTags     []string `yaml:"script_tags"`         // 允许执行脚本的标签列表
 }
 
 // SecurityConfig 安全过滤和访问控制配置
 // 实现多层安全过滤机制，包括命令黑名单、白名单、参数验证等
 type SecurityConfig struct {
+	Group           string   `yaml:"group"`              // 安全策略分组名称
 	DefaultShell    bool     `yaml:"default_shell"`      // 默认是否使用 shell 执行命令（false=直接执行，更安全）
 	AllowShellFor   []string `yaml:"allow_shell_for"`    // 允许使用 shell 的命令列表
 	DenylistExact   []string `yaml:"denylist_exact"`     // 精确匹配的黑名单命令（如 rm, dd, mkfs 等）
@@ -79,6 +91,7 @@ type ScriptConfig struct {
 	TimeoutSec   int               `yaml:"timeout_sec"`   // 脚本执行超时时间（秒）
 	UseShell     bool              `yaml:"use_shell"`     // 是否使用 shell 执行脚本
 	WorkingDir   string            `yaml:"working_dir"`   // 脚本执行的工作目录
+	Tag          string            `yaml:"tag"`           // 脚本标签，用于与主机 script_tags 匹配
 }
 
 // ScriptParameter 脚本参数定义
@@ -160,6 +173,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)
 	}
 
+	// 处理 includes 引用
+	if err := applyIncludes(&config, filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("处理 includes 失败: %w", err)
+	}
+
 	// 设置默认值，确保未配置的项有合理的默认值
 	setDefaults(&config)
 
@@ -173,6 +191,9 @@ func Load(path string) (*Config, error) {
 
 	// 展开路径中的 ~ 为用户主目录路径
 	expandPaths(&config)
+
+	// 构建运行时索引，便于后续快速查询
+	buildIndexes(&config)
 
 	return &config, nil
 }
@@ -198,11 +219,50 @@ func setDefaults(config *Config) {
 	}
 
 	// 安全配置默认值
-	if config.Security.MaxOutputBytes == 0 {
-		config.Security.MaxOutputBytes = 1024 * 1024 // 默认最大输出 1MB
+	if len(config.Security) == 0 {
+		config.Security = append(config.Security, SecurityConfig{
+			Group: "default",
+		})
 	}
-	if config.Security.RateLimitPerMin == 0 {
-		config.Security.RateLimitPerMin = 120 // 默认每分钟 120 次请求
+
+	for i := range config.Security {
+		sec := &config.Security[i]
+		if sec.Group == "" {
+			if i == 0 {
+				sec.Group = "default"
+			} else {
+				sec.Group = fmt.Sprintf("group_%d", i)
+			}
+		}
+		if sec.MaxOutputBytes == 0 {
+			sec.MaxOutputBytes = 1024 * 1024 // 默认最大输出 1MB
+		}
+		if sec.RateLimitPerMin == 0 {
+			sec.RateLimitPerMin = 120 // 默认每分钟 120 次请求
+		}
+	}
+
+	defaultGroup := config.Security[0].Group
+
+	for i := range config.SSHHosts {
+		host := &config.SSHHosts[i]
+		host.Type = strings.ToLower(strings.TrimSpace(host.Type))
+		if host.Type == "" {
+			host.Type = "linux"
+		}
+		if host.SecurityGroup == "" {
+			host.SecurityGroup = defaultGroup
+		}
+		if len(host.ScriptTags) == 0 {
+			host.ScriptTags = []string{"default"}
+		}
+	}
+
+	for i := range config.Scripts {
+		script := &config.Scripts[i]
+		if script.Tag == "" {
+			script.Tag = "default"
+		}
 	}
 
 	// 日志配置默认值
@@ -235,11 +295,38 @@ func validate(config *Config) error {
 	if len(config.SSHHosts) == 0 {
 		return fmt.Errorf("至少需要配置一个 SSH 主机")
 	}
+	if len(config.Security) == 0 {
+		return fmt.Errorf("至少需要配置一个 security 组")
+	}
+
+	allowedHostTypes := map[string]struct{}{
+		"linux":    {},
+		"macos":    {},
+		"routeros": {},
+	}
+
+	securityGroups := make(map[string]struct{}, len(config.Security))
+	for i, sec := range config.Security {
+		if strings.TrimSpace(sec.Group) == "" {
+			return fmt.Errorf("第 %d 个 security 组缺少 group 字段", i+1)
+		}
+		if _, exists := securityGroups[sec.Group]; exists {
+			return fmt.Errorf("security group '%s' 重复定义", sec.Group)
+		}
+		securityGroups[sec.Group] = struct{}{}
+	}
+
+	defaultGroup := config.Security[0].Group
+	hostIDs := make(map[string]struct{}, len(config.SSHHosts))
 
 	for i, host := range config.SSHHosts {
 		if host.ID == "" {
 			return fmt.Errorf("第 %d 个 SSH 主机缺少 ID", i+1)
 		}
+		if _, duplicate := hostIDs[host.ID]; duplicate {
+			return fmt.Errorf("SSH 主机 ID '%s' 重复定义", host.ID)
+		}
+		hostIDs[host.ID] = struct{}{}
 		if host.Addr == "" {
 			return fmt.Errorf("主机 %s 缺少地址", host.ID)
 		}
@@ -257,6 +344,22 @@ func validate(config *Config) error {
 				return fmt.Errorf("主机 %s 使用密码认证但缺少密码来源", host.ID)
 			}
 		}
+
+		hostType := strings.ToLower(strings.TrimSpace(host.Type))
+		if hostType == "" {
+			hostType = "linux"
+		}
+		if _, ok := allowedHostTypes[hostType]; !ok {
+			return fmt.Errorf("主机 %s 使用不支持的类型 '%s'", host.ID, host.Type)
+		}
+
+		groupName := host.SecurityGroup
+		if groupName == "" {
+			groupName = defaultGroup
+		}
+		if _, exists := securityGroups[groupName]; !exists {
+			return fmt.Errorf("主机 %s 引用未定义的 security_group '%s'", host.ID, host.SecurityGroup)
+		}
 	}
 
 	// 验证脚本配置
@@ -269,6 +372,9 @@ func validate(config *Config) error {
 		}
 		if script.Prompt == "" {
 			return fmt.Errorf("脚本 %s 缺少提示信息", script.Name)
+		}
+		if strings.TrimSpace(script.Tag) == "" {
+			return fmt.Errorf("脚本 %s 缺少 tag 配置", script.Name)
 		}
 	}
 
@@ -336,11 +442,15 @@ func applyServerEnvOverrides(config *Config) {
 
 // applySecurityEnvOverrides 应用安全配置相关的环境变量覆盖
 func applySecurityEnvOverrides(config *Config) {
+	sec := config.DefaultSecurityConfig()
+	if sec == nil {
+		return
+	}
 	// 格式：EXECMCP_SECURITY_<CONFIG_KEY>
-	setBoolFromEnv(&config.Security.DefaultShell, EnvSecurityDefaultShell)
-	setInt64FromEnv(&config.Security.MaxOutputBytes, EnvSecurityMaxOutputBytes)
-	setBoolFromEnv(&config.Security.EnablePTY, EnvSecurityEnablePTY)
-	setIntFromEnv(&config.Security.RateLimitPerMin, EnvSecurityRateLimitPerMin)
+	setBoolFromEnv(&sec.DefaultShell, EnvSecurityDefaultShell)
+	setInt64FromEnv(&sec.MaxOutputBytes, EnvSecurityMaxOutputBytes)
+	setBoolFromEnv(&sec.EnablePTY, EnvSecurityEnablePTY)
+	setIntFromEnv(&sec.RateLimitPerMin, EnvSecurityRateLimitPerMin)
 }
 
 // applyLoggingEnvOverrides 应用日志配置相关的环境变量覆盖
@@ -386,6 +496,20 @@ func applyDynamicSSHHost(config *Config) {
 				}
 			}
 
+			newHost.Type = strings.ToLower(strings.TrimSpace(newHost.Type))
+			if newHost.Type == "" {
+				newHost.Type = "linux"
+			}
+			if newHost.SecurityGroup == "" {
+				newHost.SecurityGroup = config.DefaultSecurityGroup()
+				if newHost.SecurityGroup == "" {
+					newHost.SecurityGroup = "default"
+				}
+			}
+			if len(newHost.ScriptTags) == 0 {
+				newHost.ScriptTags = []string{"default"}
+			}
+
 			// 检查是否已存在相同ID的主机，如果存在则替换，否则添加
 			found := false
 			for i, host := range config.SSHHosts {
@@ -407,10 +531,14 @@ func applyDynamicSSHHost(config *Config) {
 // applyDynamicSecurityRules 通过环境变量动态添加安全规则
 // 支持通过环境变量扩展安全规则列表，多个值用逗号分隔
 func applyDynamicSecurityRules(config *Config) {
-	appendStringSliceFromEnv(&config.Security.DenylistExact, EnvSecurityDenylistExact)
-	appendStringSliceFromEnv(&config.Security.AllowlistExact, EnvSecurityAllowlistExact)
-	appendStringSliceFromEnv(&config.Security.WorkingDirAllow, EnvSecurityWorkingDirAllow)
-	appendStringSliceFromEnv(&config.Security.AllowShellFor, EnvSecurityAllowShellFor)
+	sec := config.DefaultSecurityConfig()
+	if sec == nil {
+		return
+	}
+	appendStringSliceFromEnv(&sec.DenylistExact, EnvSecurityDenylistExact)
+	appendStringSliceFromEnv(&sec.AllowlistExact, EnvSecurityAllowlistExact)
+	appendStringSliceFromEnv(&sec.WorkingDirAllow, EnvSecurityWorkingDirAllow)
+	appendStringSliceFromEnv(&sec.AllowShellFor, EnvSecurityAllowShellFor)
 }
 
 // setStringFromEnv 从环境变量设置字符串值
@@ -500,5 +628,208 @@ func setBoolPointerFromEnv(target **bool, envKey string) {
 func appendStringSliceFromEnv(target *[]string, envKey string) {
 	if value := common.GetEnv(envKey, ""); value != "" {
 		*target = append(*target, common.SplitCommaSeparated(value)...)
+	}
+}
+
+// applyIncludes 处理配置文件中的 includes 扩展
+func applyIncludes(cfg *Config, baseDir string) error {
+	if err := appendSSHHostIncludes(cfg, baseDir); err != nil {
+		return err
+	}
+	if err := appendSecurityIncludes(cfg, baseDir); err != nil {
+		return err
+	}
+	if err := appendScriptIncludes(cfg, baseDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func appendSSHHostIncludes(cfg *Config, baseDir string) error {
+	if len(cfg.SSHHostIncludes) == 0 {
+		return nil
+	}
+	included, err := loadSSHHosts(baseDir, cfg.SSHHostIncludes)
+	if err != nil {
+		return err
+	}
+	cfg.SSHHosts = append(cfg.SSHHosts, included...)
+	return nil
+}
+
+func appendSecurityIncludes(cfg *Config, baseDir string) error {
+	if len(cfg.SecurityIncludes) == 0 {
+		return nil
+	}
+	included, err := loadSecurityConfigs(baseDir, cfg.SecurityIncludes)
+	if err != nil {
+		return err
+	}
+	cfg.Security = append(cfg.Security, included...)
+	return nil
+}
+
+func appendScriptIncludes(cfg *Config, baseDir string) error {
+	if len(cfg.ScriptIncludes) == 0 {
+		return nil
+	}
+	included, err := loadScriptConfigs(baseDir, cfg.ScriptIncludes)
+	if err != nil {
+		return err
+	}
+	cfg.Scripts = append(cfg.Scripts, included...)
+	return nil
+}
+
+func loadSSHHosts(baseDir string, includes []string) ([]SSHHost, error) {
+	var result []SSHHost
+	for _, inc := range includes {
+		hosts := []SSHHost{}
+		if err := loadIncludeFile(baseDir, inc, &hosts, "ssh_hosts", func(wrapper *includeWrapper) interface{} {
+			return &wrapper.SSHHosts
+		}); err != nil {
+			return nil, fmt.Errorf("加载 ssh_hosts include '%s' 失败: %w", inc, err)
+		}
+		result = append(result, hosts...)
+	}
+	return result, nil
+}
+
+func loadSecurityConfigs(baseDir string, includes []string) ([]SecurityConfig, error) {
+	var result []SecurityConfig
+	for _, inc := range includes {
+		secs := []SecurityConfig{}
+		if err := loadIncludeFile(baseDir, inc, &secs, "security", func(wrapper *includeWrapper) interface{} {
+			return &wrapper.Security
+		}); err != nil {
+			return nil, fmt.Errorf("加载 security include '%s' 失败: %w", inc, err)
+		}
+		result = append(result, secs...)
+	}
+	return result, nil
+}
+
+func loadScriptConfigs(baseDir string, includes []string) ([]ScriptConfig, error) {
+	var result []ScriptConfig
+	for _, inc := range includes {
+		scripts := []ScriptConfig{}
+		if err := loadIncludeFile(baseDir, inc, &scripts, "scripts", func(wrapper *includeWrapper) interface{} {
+			return &wrapper.Scripts
+		}); err != nil {
+			return nil, fmt.Errorf("加载 scripts include '%s' 失败: %w", inc, err)
+		}
+		result = append(result, scripts...)
+	}
+	return result, nil
+}
+
+type includeWrapper struct {
+	SSHHosts []SSHHost        `yaml:"ssh_hosts"`
+	Security []SecurityConfig `yaml:"security"`
+	Scripts  []ScriptConfig   `yaml:"scripts"`
+}
+
+func loadIncludeFile(baseDir, includePath string, target interface{}, wrapperKey string, selector func(*includeWrapper) interface{}) error {
+	fullPath := includePath
+	if !filepath.IsAbs(includePath) {
+		fullPath = filepath.Join(baseDir, includePath)
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return err
+	}
+
+	if err := yaml.Unmarshal(data, target); err == nil {
+		return nil
+	}
+
+	var wrapper includeWrapper
+	if err := yaml.Unmarshal(data, &wrapper); err != nil {
+		return err
+	}
+
+	selected := selector(&wrapper)
+	switch dst := target.(type) {
+	case *[]SSHHost:
+		if hosts, ok := selected.(*[]SSHHost); ok {
+			*dst = append(*dst, (*hosts)...)
+			return nil
+		}
+	case *[]SecurityConfig:
+		if secs, ok := selected.(*[]SecurityConfig); ok {
+			*dst = append(*dst, (*secs)...)
+			return nil
+		}
+	case *[]ScriptConfig:
+		if scripts, ok := selected.(*[]ScriptConfig); ok {
+			*dst = append(*dst, (*scripts)...)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("include 文件 '%s' 缺少有效的 %s 配置", includePath, wrapperKey)
+}
+
+// DefaultSecurityConfig 返回默认的安全配置（第一个 security 组）
+func (c *Config) DefaultSecurityConfig() *SecurityConfig {
+	if len(c.Security) == 0 {
+		return nil
+	}
+	return &c.Security[0]
+}
+
+// DefaultSecurityGroup 返回默认安全组名称
+func (c *Config) DefaultSecurityGroup() string {
+	if len(c.Security) == 0 {
+		return ""
+	}
+	return c.Security[0].Group
+}
+
+// SecurityByGroup 根据 group 名称获取安全配置
+func (c *Config) SecurityByGroup(group string) (*SecurityConfig, bool) {
+	c.ensureIndexes()
+	if group == "" {
+		group = c.DefaultSecurityGroup()
+	}
+	sec, ok := c.securityIndex[group]
+	return sec, ok
+}
+
+// SecurityForHost 返回指定主机对应的安全配置
+func (c *Config) SecurityForHost(hostID string) (*SecurityConfig, bool) {
+	c.ensureIndexes()
+	host, ok := c.hostIndex[hostID]
+	if !ok {
+		return nil, false
+	}
+	return c.SecurityByGroup(host.SecurityGroup)
+}
+
+// HostByID 根据主机 ID 返回配置
+func (c *Config) HostByID(hostID string) (*SSHHost, bool) {
+	c.ensureIndexes()
+	host, ok := c.hostIndex[hostID]
+	return host, ok
+}
+
+func (c *Config) ensureIndexes() {
+	if c.securityIndex == nil || c.hostIndex == nil {
+		buildIndexes(c)
+	}
+}
+
+func buildIndexes(c *Config) {
+	c.securityIndex = make(map[string]*SecurityConfig, len(c.Security))
+	for i := range c.Security {
+		sec := &c.Security[i]
+		c.securityIndex[sec.Group] = sec
+	}
+
+	c.hostIndex = make(map[string]*SSHHost, len(c.SSHHosts))
+	for i := range c.SSHHosts {
+		host := &c.SSHHosts[i]
+		c.hostIndex[host.ID] = host
 	}
 }

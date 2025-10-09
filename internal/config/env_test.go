@@ -83,19 +83,21 @@ func TestApplyEnvOverrides_SecurityConfig(t *testing.T) {
 	}()
 
 	config := &Config{}
+	config.Security = []SecurityConfig{{Group: "default"}}
 	applyEnvOverrides(config)
 
-	if !config.Security.DefaultShell {
+	sec := config.Security[0]
+	if !sec.DefaultShell {
 		t.Error("期望 DefaultShell = true")
 	}
-	if config.Security.MaxOutputBytes != 2048000 {
-		t.Errorf("期望 MaxOutputBytes = 2048000, 得到 %d", config.Security.MaxOutputBytes)
+	if sec.MaxOutputBytes != 2048000 {
+		t.Errorf("期望 MaxOutputBytes = 2048000, 得到 %d", sec.MaxOutputBytes)
 	}
-	if !config.Security.EnablePTY {
+	if !sec.EnablePTY {
 		t.Error("期望 EnablePTY = true")
 	}
-	if config.Security.RateLimitPerMin != 240 {
-		t.Errorf("期望 RateLimitPerMin = 240, 得到 %d", config.Security.RateLimitPerMin)
+	if sec.RateLimitPerMin != 240 {
+		t.Errorf("期望 RateLimitPerMin = 240, 得到 %d", sec.RateLimitPerMin)
 	}
 }
 
@@ -329,35 +331,39 @@ func TestApplyEnvOverrides_SecurityRules(t *testing.T) {
 	}()
 
 	config := &Config{
-		Security: SecurityConfig{
-			DenylistExact:   []string{"existing-deny"},
-			AllowlistExact:  []string{"existing-allow"},
-			WorkingDirAllow: []string{"/existing"},
-			AllowShellFor:   []string{"existing-shell"},
+		Security: []SecurityConfig{
+			{
+				Group:           "default",
+				DenylistExact:   []string{"existing-deny"},
+				AllowlistExact:  []string{"existing-allow"},
+				WorkingDirAllow: []string{"/existing"},
+				AllowShellFor:   []string{"existing-shell"},
+			},
 		},
 	}
 
 	applyEnvOverrides(config)
 
 	// 验证新的规则被追加
+	sec := config.Security[0]
 	expectedDenylist := []string{"existing-deny", "rm", "dd", "shutdown"}
-	if !equalStringSlices(config.Security.DenylistExact, expectedDenylist) {
-		t.Errorf("期望 DenylistExact = %v, 得到 %v", expectedDenylist, config.Security.DenylistExact)
+	if !equalStringSlices(sec.DenylistExact, expectedDenylist) {
+		t.Errorf("期望 DenylistExact = %v, 得到 %v", expectedDenylist, sec.DenylistExact)
 	}
 
 	expectedAllowlist := []string{"existing-allow", "echo", "ls", "pwd"}
-	if !equalStringSlices(config.Security.AllowlistExact, expectedAllowlist) {
-		t.Errorf("期望 AllowlistExact = %v, 得到 %v", expectedAllowlist, config.Security.AllowlistExact)
+	if !equalStringSlices(sec.AllowlistExact, expectedAllowlist) {
+		t.Errorf("期望 AllowlistExact = %v, 得到 %v", expectedAllowlist, sec.AllowlistExact)
 	}
 
 	expectedWorkingDirs := []string{"/existing", "/tmp", "/var/log"}
-	if !equalStringSlices(config.Security.WorkingDirAllow, expectedWorkingDirs) {
-		t.Errorf("期望 WorkingDirAllow = %v, 得到 %v", expectedWorkingDirs, config.Security.WorkingDirAllow)
+	if !equalStringSlices(sec.WorkingDirAllow, expectedWorkingDirs) {
+		t.Errorf("期望 WorkingDirAllow = %v, 得到 %v", expectedWorkingDirs, sec.WorkingDirAllow)
 	}
 
 	expectedShellAllow := []string{"existing-shell", "bash", "zsh"}
-	if !equalStringSlices(config.Security.AllowShellFor, expectedShellAllow) {
-		t.Errorf("期望 AllowShellFor = %v, 得到 %v", expectedShellAllow, config.Security.AllowShellFor)
+	if !equalStringSlices(sec.AllowShellFor, expectedShellAllow) {
+		t.Errorf("期望 AllowShellFor = %v, 得到 %v", expectedShellAllow, sec.AllowShellFor)
 	}
 }
 
@@ -390,9 +396,12 @@ func TestApplyEnvOverrides_InvalidValues(t *testing.T) {
 		Server: ServerConfig{
 			MaxConcurrent: 32,
 		},
-		Security: SecurityConfig{
-			DefaultShell:   false,
-			MaxOutputBytes: 1024,
+		Security: []SecurityConfig{
+			{
+				Group:          "default",
+				DefaultShell:   false,
+				MaxOutputBytes: 1024,
+			},
 		},
 		Logging: LoggingConfig{
 			MaxBackups: 5,
@@ -406,11 +415,12 @@ func TestApplyEnvOverrides_InvalidValues(t *testing.T) {
 	if config.Server.MaxConcurrent != 32 {
 		t.Errorf("期望 MaxConcurrent 保持原值 32, 得到 %d", config.Server.MaxConcurrent)
 	}
-	if config.Security.DefaultShell != false {
-		t.Errorf("期望 DefaultShell 保持原值 false, 得到 %t", config.Security.DefaultShell)
+	sec := config.Security[0]
+	if sec.DefaultShell != false {
+		t.Errorf("期望 DefaultShell 保持原值 false, 得到 %t", sec.DefaultShell)
 	}
-	if config.Security.MaxOutputBytes != 1024 {
-		t.Errorf("期望 MaxOutputBytes 保持原值 1024, 得到 %d", config.Security.MaxOutputBytes)
+	if sec.MaxOutputBytes != 1024 {
+		t.Errorf("期望 MaxOutputBytes 保持原值 1024, 得到 %d", sec.MaxOutputBytes)
 	}
 	if config.Logging.MaxBackups != 5 {
 		t.Errorf("期望 MaxBackups 保持原值 5, 得到 %d", config.Logging.MaxBackups)
@@ -446,9 +456,7 @@ func TestApplyEnvOverrides_NoEnvVars(t *testing.T) {
 		Server: ServerConfig{
 			BindAddr: "original-value",
 		},
-		Security: SecurityConfig{
-			DefaultShell: false,
-		},
+		Security: []SecurityConfig{{Group: "default", DefaultShell: false}},
 		Logging: LoggingConfig{
 			Level: "original-level",
 		},
@@ -465,8 +473,8 @@ func TestApplyEnvOverrides_NoEnvVars(t *testing.T) {
 	if config.Server.BindAddr != "original-value" {
 		t.Errorf("期望 BindAddr 保持原值 'original-value', 得到 '%s'", config.Server.BindAddr)
 	}
-	if config.Security.DefaultShell != false {
-		t.Errorf("期望 DefaultShell 保持原值 false, 得到 %t", config.Security.DefaultShell)
+	if config.Security[0].DefaultShell != false {
+		t.Errorf("期望 DefaultShell 保持原值 false, 得到 %t", config.Security[0].DefaultShell)
 	}
 	if config.Logging.Level != "original-level" {
 		t.Errorf("期望 Level 保持原值 'original-level', 得到 '%s'", config.Logging.Level)

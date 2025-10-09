@@ -17,10 +17,11 @@ import (
 
 // StreamManager 流式输出管理器
 type StreamManager struct {
-	config     *config.Config
-	logger     logging.Logger
-	sshManager ssh.Manager
-	filter     *security.Filter
+	config         *config.Config
+	logger         logging.Logger
+	sshManager     ssh.Manager
+	filtersByGroup map[string]*security.Filter
+	hostSecurity   map[string]*config.SecurityConfig
 }
 
 // CommandStream 命令执行流
@@ -47,11 +48,19 @@ func NewStreamManagerWithManager(cfg *config.Config, logger logging.Logger, mana
 		return nil
 	}
 
+	auditLogger := audit.NewNoopLogger()
+	filtersByGroup, hostSecurity, _, err := buildSecurityCaches(cfg, logger, auditLogger)
+	if err != nil {
+		logger.Error("初始化流式管理器失败", "error", err)
+		return nil
+	}
+
 	return &StreamManager{
-		config:     cfg,
-		logger:     logger,
-		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security, logger, audit.NewNoopLogger()),
+		config:         cfg,
+		logger:         logger,
+		sshManager:     manager,
+		filtersByGroup: filtersByGroup,
+		hostSecurity:   hostSecurity,
 	}
 }
 
@@ -67,6 +76,14 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 		"use_shell", req.Options.UseShell)
 
 	// 1. 安全过滤
+	filter, secCfg, err := sm.filterForHost(req.HostID)
+	if err != nil {
+		sm.logger.Error("无法获取主机安全配置",
+			"host_id", req.HostID,
+			"error", err)
+		return nil, fmt.Errorf("安全检查失败: %w", err)
+	}
+
 	securityReq := security.ExecRequest{
 		HostID:  req.HostID,
 		Command: req.Command,
@@ -82,7 +99,7 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 		},
 	}
 
-	if err := sm.filter.Check(ctx, securityReq); err != nil {
+	if err := filter.Check(ctx, securityReq); err != nil {
 		sm.logger.Error("命令被安全过滤拒绝",
 			"host_id", req.HostID,
 			"command", req.Command,
@@ -110,7 +127,7 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 		errorChan: make(chan error, 1),
 		session:   session,
 		closed:    false,
-		maxOutput: sm.config.Security.MaxOutputBytes,
+		maxOutput: secCfg.MaxOutputBytes,
 	}
 
 	// 5. 异步执行命令
@@ -233,6 +250,18 @@ func (sm *StreamManager) executeCommandAsync(ctx context.Context, stream *Comman
 			"command", req.Command,
 			"total_bytes", stream.totalWritten)
 	}()
+}
+
+func (sm *StreamManager) filterForHost(hostID string) (*security.Filter, *config.SecurityConfig, error) {
+	secCfg, ok := sm.hostSecurity[hostID]
+	if !ok {
+		return nil, nil, fmt.Errorf("主机 '%s' 未配置", hostID)
+	}
+	filter, ok := sm.filtersByGroup[secCfg.Group]
+	if !ok {
+		return nil, nil, fmt.Errorf("安全组 '%s' 未配置", secCfg.Group)
+	}
+	return filter, secCfg, nil
 }
 
 // Read 实现io.Reader接口

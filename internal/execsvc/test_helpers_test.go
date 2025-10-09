@@ -7,7 +7,6 @@ import (
 	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
 	"github.com/terateams/ExecMCP/internal/logging"
-	"github.com/terateams/ExecMCP/internal/security"
 	"github.com/terateams/ExecMCP/internal/ssh"
 )
 
@@ -41,16 +40,23 @@ func newBaseTestConfig() *config.Config {
 				PrivateKeyPath: "testdata/mock_id_rsa",
 				KnownHosts:     testKnownHostsPath,
 				MaxSessions:    4,
+				Type:           "linux",
+				Description:    "Test host",
+				SecurityGroup:  "default",
+				ScriptTags:     []string{"default"},
 			},
 		},
-		Security: config.SecurityConfig{
-			DefaultShell:    false,
-			AllowShellFor:   []string{"bash"},
-			DenylistExact:   []string{"rm", "dd"},
-			AllowlistExact:  []string{"echo", "ls", "pwd", "bash", "sh", "sleep"},
-			AllowlistRegex:  []string{},
-			WorkingDirAllow: []string{"/tmp", "."},
-			MaxOutputBytes:  1024 * 1024,
+		Security: []config.SecurityConfig{
+			{
+				Group:           "default",
+				DefaultShell:    false,
+				AllowShellFor:   []string{"bash"},
+				DenylistExact:   []string{"rm", "dd"},
+				AllowlistExact:  []string{"echo", "ls", "pwd", "bash", "sh", "sleep"},
+				AllowlistRegex:  []string{},
+				WorkingDirAllow: []string{"/tmp", "."},
+				MaxOutputBytes:  1024 * 1024,
+			},
 		},
 		Logging: config.LoggingConfig{
 			Level:  "error",
@@ -71,16 +77,14 @@ func newTestServiceWithConfig(t *testing.T, modify func(cfg *config.Config)) *Se
 	}
 
 	logger := newTestLogger()
-	manager := ssh.NewMockManager(cfg)
 	auditLogger := audit.NewNoopLogger()
 
-	return &Service{
-		config:     cfg,
-		logger:     logger,
-		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security, logger, auditLogger),
-		audit:      auditLogger,
+	svc, err := NewService(cfg, logger, auditLogger)
+	if err != nil {
+		t.Fatalf("初始化测试 Service 失败: %v", err)
 	}
+	svc.sshManager = ssh.NewMockManager(cfg)
+	return svc
 }
 
 // newTestStreamManager 与 newTestServiceWithConfig 类似，用于构造 StreamManager，
@@ -95,12 +99,10 @@ func newTestStreamManager(t *testing.T, modify func(cfg *config.Config)) *Stream
 
 	logger := newTestLogger()
 	manager := ssh.NewMockManager(cfg)
-	auditLogger := audit.NewNoopLogger()
 
-	return &StreamManager{
-		config:     cfg,
-		logger:     logger,
-		sshManager: manager,
-		filter:     security.NewFilter(&cfg.Security, logger, auditLogger),
+	streamManager := NewStreamManagerWithManager(cfg, logger, manager)
+	if streamManager == nil {
+		t.Fatal("初始化 StreamManager 失败")
 	}
+	return streamManager
 }

@@ -434,9 +434,11 @@ func (s *RealSession) ExecuteCommand(command string, args []string, enablePTY bo
 		s.connection.logger.Error("命令执行失败",
 			"host_id", s.connection.HostID,
 			"command", cmd,
+			"stdout", stdout.String(),
 			"error", err,
 			"stderr", stderr.String())
-		return "", fmt.Errorf("命令执行失败: %w, stderr: %s", err, stderr.String())
+		return "", fmt.Errorf("命令执行失败: %w, stdout：%s， stderr: %s", 
+		err, stdout.String(), stderr.String())
 	}
 
 	// 合并stdout和stderr；对于 PTY 模式，stderr 会自动与 stdout 合并

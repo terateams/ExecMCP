@@ -27,15 +27,20 @@ ssh_hosts:
     private_key_path: "~/.ssh/id_rsa"
     known_hosts: "~/.ssh/known_hosts"
     max_sessions: 4
+    type: "linux"
+    description: "Primary test host"
+    security_group: "default"
+    script_tags: ["default", "ops"]
 
 security:
-  default_shell: false
-  allow_shell_for: ["bash", "sh"]
-  denylist_exact: ["rm", "dd"]
-  allowlist_exact: ["ls", "cat"]
-  working_dir_allow: ["/tmp"]
-  max_output_bytes: 512000
-  rate_limit_per_min: 100
+  - group: "default"
+    default_shell: false
+    allow_shell_for: ["bash", "sh"]
+    denylist_exact: ["rm", "dd"]
+    allowlist_exact: ["ls", "cat"]
+    working_dir_allow: ["/tmp"]
+    max_output_bytes: 512000
+    rate_limit_per_min: 100
 
 scripts:
   - name: "test-script"
@@ -51,6 +56,7 @@ scripts:
     allowed_hosts: ["*"]
     timeout_sec: 10
     use_shell: true
+    tag: "default"
 
 logging:
   level: "info"
@@ -101,16 +107,35 @@ logging:
 	if host.AuthMethod != "private_key" {
 		t.Errorf("期望 AuthMethod 为 'private_key'，但得到 '%s'", host.AuthMethod)
 	}
+	if host.Type != "linux" {
+		t.Errorf("期望主机类型为 'linux'，但得到 '%s'", host.Type)
+	}
+	if host.Description != "Primary test host" {
+		t.Errorf("期望主机描述匹配，得到 '%s'", host.Description)
+	}
+	if host.SecurityGroup != "default" {
+		t.Errorf("期望主机安全组为 'default'，但得到 '%s'", host.SecurityGroup)
+	}
+	if len(host.ScriptTags) != 2 || host.ScriptTags[0] != "default" {
+		t.Errorf("期望主机 script_tags 含有 'default', 'ops'，得到 %v", host.ScriptTags)
+	}
 
 	// 验证安全配置
-	if cfg.Security.DefaultShell {
+	if len(cfg.Security) != 1 {
+		t.Fatalf("期望 1 个安全组，但得到 %d", len(cfg.Security))
+	}
+	sec := cfg.Security[0]
+	if sec.Group != "default" {
+		t.Errorf("期望安全组名称为 'default'，但得到 '%s'", sec.Group)
+	}
+	if sec.DefaultShell {
 		t.Error("期望 DefaultShell 为 false")
 	}
-	if len(cfg.Security.AllowShellFor) != 2 {
-		t.Errorf("期望 AllowShellFor 有 2 个元素，但得到 %d", len(cfg.Security.AllowShellFor))
+	if len(sec.AllowShellFor) != 2 {
+		t.Errorf("期望 AllowShellFor 有 2 个元素，但得到 %d", len(sec.AllowShellFor))
 	}
-	if len(cfg.Security.DenylistExact) != 2 {
-		t.Errorf("期望 DenylistExact 有 2 个元素，但得到 %d", len(cfg.Security.DenylistExact))
+	if len(sec.DenylistExact) != 2 {
+		t.Errorf("期望 DenylistExact 有 2 个元素，但得到 %d", len(sec.DenylistExact))
 	}
 
 	// 验证脚本配置
@@ -190,11 +215,25 @@ ssh_hosts:
 	if cfg.Server.RequestTimeout != 30 {
 		t.Errorf("期望默认 RequestTimeout 为 30，但得到 %d", cfg.Server.RequestTimeout)
 	}
-	if cfg.Security.MaxOutputBytes != 1024*1024 {
-		t.Errorf("期望默认 MaxOutputBytes 为 1MB，但得到 %d", cfg.Security.MaxOutputBytes)
+	sec := cfg.DefaultSecurityConfig()
+	if sec == nil {
+		t.Fatal("期望默认安全配置存在")
 	}
-	if cfg.Security.RateLimitPerMin != 120 {
-		t.Errorf("期望默认 RateLimitPerMin 为 120，但得到 %d", cfg.Security.RateLimitPerMin)
+	if sec.MaxOutputBytes != 1024*1024 {
+		t.Errorf("期望默认 MaxOutputBytes 为 1MB，但得到 %d", sec.MaxOutputBytes)
+	}
+	if sec.RateLimitPerMin != 120 {
+		t.Errorf("期望默认 RateLimitPerMin 为 120，但得到 %d", sec.RateLimitPerMin)
+	}
+	host := cfg.SSHHosts[0]
+	if host.Type != "linux" {
+		t.Errorf("期望默认主机类型为 linux，但得到 %s", host.Type)
+	}
+	if host.SecurityGroup != "default" {
+		t.Errorf("期望默认安全组为 default，但得到 %s", host.SecurityGroup)
+	}
+	if len(host.ScriptTags) != 1 || host.ScriptTags[0] != "default" {
+		t.Errorf("期望默认 script_tags 为 ['default']，得到 %v", host.ScriptTags)
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("期望默认日志级别为 'info'，但得到 '%s'", cfg.Logging.Level)
@@ -204,6 +243,92 @@ ssh_hosts:
 	}
 	if cfg.Audit.FilePath != "security_audit.log" {
 		t.Errorf("期望默认安全审计日志文件路径为 'security_audit.log'，但得到 '%s'", cfg.Audit.FilePath)
+	}
+}
+
+func TestLoad_ConfigIncludes(t *testing.T) {
+	tempDir := t.TempDir()
+
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(tempDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("写入测试文件失败: %v", err)
+		}
+	}
+
+	write("hosts.yaml", `
+- id: "inc-host"
+  addr: "inc:22"
+  user: "inc-user"
+  auth_method: "private_key"
+  private_key_path: "~/.ssh/id_rsa"
+`)
+
+	write("security.yaml", `
+- group: "included"
+  allowlist_exact: ["ls"]
+`)
+
+	write("scripts.yaml", `
+- name: "inc-script"
+  description: "included"
+  prompt: "run"
+  template: "echo hi"
+  allowed_hosts: ["*"]
+  use_shell: true
+  tag: "default"
+`)
+
+	mainConfig := `
+server:
+  bind_addr: "127.0.0.1:8080"
+
+ssh_hosts:
+  - id: "base-host"
+    addr: "localhost:22"
+    user: "base"
+    auth_method: "private_key"
+    private_key_path: "~/.ssh/id_rsa"
+
+ssh_hosts_includes:
+  - "hosts.yaml"
+
+security:
+  - group: "default"
+    allowlist_exact: ["echo"]
+
+security_includes:
+  - "security.yaml"
+
+scripts_includes:
+  - "scripts.yaml"
+`
+	configPath := filepath.Join(tempDir, "config.yaml")
+	write("config.yaml", mainConfig)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("加载包含 includes 的配置失败: %v", err)
+	}
+
+	if len(cfg.SSHHosts) != 2 {
+		t.Fatalf("期望 2 个 SSH 主机，得到 %d", len(cfg.SSHHosts))
+	}
+	if cfg.SSHHosts[1].ID != "inc-host" {
+		t.Fatalf("期望包含的主机 inc-host，得到 %s", cfg.SSHHosts[1].ID)
+	}
+
+	if len(cfg.Security) != 2 {
+		t.Fatalf("期望 2 个安全组，得到 %d", len(cfg.Security))
+	}
+	if cfg.Security[1].Group != "included" {
+		t.Fatalf("期望包含的安全组 included，得到 %s", cfg.Security[1].Group)
+	}
+
+	if len(cfg.Scripts) != 1 {
+		t.Fatalf("期望包含脚本 1 个，得到 %d", len(cfg.Scripts))
+	}
+	if cfg.Scripts[0].Name != "inc-script" {
+		t.Fatalf("期望脚本 inc-script，得到 %s", cfg.Scripts[0].Name)
 	}
 }
 

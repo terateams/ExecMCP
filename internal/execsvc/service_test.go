@@ -8,14 +8,13 @@ import (
 
 	"github.com/terateams/ExecMCP/internal/audit"
 	"github.com/terateams/ExecMCP/internal/config"
-	"github.com/terateams/ExecMCP/internal/logging"
-	"github.com/terateams/ExecMCP/internal/security"
+	"github.com/terateams/ExecMCP/internal/ssh"
 	"github.com/terateams/ExecMCP/internal/testutils"
 )
 
 func TestNewService(t *testing.T) {
-	cfg := &config.Config{Server: config.ServerConfig{BindAddr: "127.0.0.1:8080"}}
-	logger := logging.NewLogger(config.LoggingConfig{})
+	cfg := newBaseTestConfig()
+	logger := newTestLogger()
 
 	svc, err := NewService(cfg, logger, audit.NewNoopLogger())
 	if err != nil {
@@ -80,6 +79,7 @@ func TestService_ExecuteScript(t *testing.T) {
 				},
 				AllowedHosts: []string{"*"},
 				UseShell:     true,
+				Tag:          "default",
 			},
 		}
 	})
@@ -112,6 +112,7 @@ func TestService_ExecuteScript_DefaultValues(t *testing.T) {
 				},
 				AllowedHosts: []string{"*"},
 				UseShell:     true,
+				Tag:          "default",
 			},
 		}
 	})
@@ -149,6 +150,7 @@ func TestService_ExecuteScript_MissingRequiredParameters(t *testing.T) {
 				Parameters:   []config.ScriptParameter{{Name: "name", Type: "string", Required: true}},
 				AllowedHosts: []string{"*"},
 				UseShell:     true,
+				Tag:          "default",
 			},
 		}
 	})
@@ -163,9 +165,70 @@ func TestService_ExecuteScript_MissingRequiredParameters(t *testing.T) {
 	}
 }
 
+func TestService_ExecuteScript_ScriptTagRestrictions(t *testing.T) {
+	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.SSHHosts[0].ScriptTags = []string{"ops"}
+		cfg.Scripts = []config.ScriptConfig{
+			{
+				Name:         "ops-script",
+				Template:     "echo ops",
+				AllowedHosts: []string{"*"},
+				UseShell:     true,
+				Tag:          "ops",
+			},
+			{
+				Name:         "db-script",
+				Template:     "echo db",
+				AllowedHosts: []string{"*"},
+				UseShell:     true,
+				Tag:          "db",
+			},
+		}
+	})
+
+	if _, err := svc.ExecuteScript(context.Background(), ScriptRequest{
+		HostID:     "test-host",
+		ScriptName: "ops-script",
+		Parameters: map[string]interface{}{},
+	}); err != nil {
+		t.Fatalf("期望拥有标签匹配的脚本执行成功，但得到错误: %v", err)
+	}
+
+	if _, err := svc.ExecuteScript(context.Background(), ScriptRequest{
+		HostID:     "test-host",
+		ScriptName: "db-script",
+		Parameters: map[string]interface{}{},
+	}); err == nil || !strings.Contains(err.Error(), "标签") {
+		t.Fatalf("期望标签不匹配的脚本被拒绝，得到: %v", err)
+	}
+}
+
+func TestService_ExecuteScript_AllowedHostsRestrictions(t *testing.T) {
+	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.Scripts = []config.ScriptConfig{
+			{
+				Name:         "restricted",
+				Template:     "echo restricted",
+				AllowedHosts: []string{"prod-*"},
+				UseShell:     true,
+				Tag:          "default",
+			},
+		}
+	})
+
+	_, err := svc.ExecuteScript(context.Background(), ScriptRequest{
+		HostID:     "test-host",
+		ScriptName: "restricted",
+		Parameters: map[string]interface{}{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "不允许在主机") {
+		t.Fatalf("期望不匹配 allowed_hosts 的脚本被拒绝，得到: %v", err)
+	}
+}
+
 func TestService_ExecuteCommand_PTYDisabled(t *testing.T) {
 	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
-		cfg.Security.EnablePTY = false
+		cfg.Security[0].EnablePTY = false
 	})
 
 	_, err := svc.ExecuteCommand(context.Background(), ExecRequest{
@@ -181,7 +244,7 @@ func TestService_ExecuteCommand_PTYDisabled(t *testing.T) {
 
 func TestService_ExecuteCommand_PTYEnabled(t *testing.T) {
 	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
-		cfg.Security.EnablePTY = true
+		cfg.Security[0].EnablePTY = true
 	})
 
 	result, err := svc.ExecuteCommand(context.Background(), ExecRequest{
@@ -324,11 +387,15 @@ func TestService_ExecuteCommand_ContextTimeout(t *testing.T) {
 
 func TestService_ExecuteCommand_AuditEvents(t *testing.T) {
 	recorder := testutils.NewRecordingAuditLogger()
-	svc := newTestServiceWithConfig(t, nil)
-	svc.audit = recorder
-	svc.filter = security.NewFilter(&svc.config.Security, svc.logger, recorder)
+	cfg := newBaseTestConfig()
+	logger := newTestLogger()
+	svc, err := NewService(cfg, logger, recorder)
+	if err != nil {
+		t.Fatalf("初始化 Service 失败: %v", err)
+	}
+	svc.sshManager = ssh.NewMockManager(cfg)
 
-	_, err := svc.ExecuteCommand(context.Background(), ExecRequest{
+	_, err = svc.ExecuteCommand(context.Background(), ExecRequest{
 		HostID:  "test-host",
 		Command: "echo",
 		Args:    []string{"audit"},

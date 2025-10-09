@@ -173,6 +173,21 @@ ExecMCP 是一个安全优先的 Go 语言 MCP 服务器，通过 SSH 为 Linux 
 
 - [x] 通过 github 工作流实现推送 tag 后自动构建 docker 容器, 支持 arm64 amd64
 
+### 🧩 阶段 6: 配置与脚本扩展 ⏳ (待规划)
+
+#### 19. SSH 主机配置扩展
+
+- [x] `SSHHost` 增加 `type` 字段，支持 `linux` | `macos` | `routeros`
+- [x] `SSHHost` 增加 `description` 字段，并在 MCP 消息中透出，便于 AI 理解节点信息
+- [x] `SSHHost` 支持配置 `security_group`，每个主机仅允许关联一个 group
+- [x] `SSHHost` 增加 `script_tags` 字段，用于约束可执行脚本集合
+
+#### 20. 安全策略与脚本标签增强
+
+- [x] `security` 配置支持 list 模式，可定义多个安全策略条目
+- [x] 为 `security` 条目增加 `group` 属性，支持与主机分组关联
+- [x] 脚本定义增加 `tag` 属性，配合主机 `script_tags` 实现精确匹配
+
 ## 开发顺序建议
 
 1. **严格按照清单顺序开发**，确保依赖关系正确

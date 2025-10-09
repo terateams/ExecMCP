@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,11 +22,50 @@ import (
 
 // Service 命令执行服务
 type Service struct {
-	config     *config.Config
-	logger     logging.Logger
-	sshManager ssh.Manager
-	filter     *security.Filter
-	audit      audit.Logger
+	config         *config.Config
+	logger         logging.Logger
+	sshManager     ssh.Manager
+	filtersByGroup map[string]*security.Filter
+	hostSecurity   map[string]*config.SecurityConfig
+	hostIndex      map[string]*config.SSHHost
+	audit          audit.Logger
+}
+
+func buildSecurityCaches(cfg *config.Config, logger logging.Logger, auditLogger audit.Logger) (map[string]*security.Filter, map[string]*config.SecurityConfig, map[string]*config.SSHHost, error) {
+	filtersByGroup := make(map[string]*security.Filter)
+	for i := range cfg.Security {
+		sec := &cfg.Security[i]
+		filtersByGroup[sec.Group] = security.NewFilter(sec, logger, auditLogger)
+	}
+
+	defaultGroup := cfg.DefaultSecurityGroup()
+	hostSecurity := make(map[string]*config.SecurityConfig)
+	hostIndex := make(map[string]*config.SSHHost)
+
+	for i := range cfg.SSHHosts {
+		host := &cfg.SSHHosts[i]
+
+		if host.SecurityGroup == "" {
+			host.SecurityGroup = defaultGroup
+		}
+		host.Type = strings.ToLower(strings.TrimSpace(host.Type))
+		if host.Type == "" {
+			host.Type = "linux"
+		}
+		host.ScriptTags = normalizeTags(host.ScriptTags)
+		if len(host.ScriptTags) == 0 {
+			host.ScriptTags = []string{"default"}
+		}
+
+		secCfg, ok := cfg.SecurityByGroup(host.SecurityGroup)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("主机 %s 引用未定义的 security_group '%s'", host.ID, host.SecurityGroup)
+		}
+		hostSecurity[host.ID] = secCfg
+		hostIndex[host.ID] = host
+	}
+
+	return filtersByGroup, hostSecurity, hostIndex, nil
 }
 
 // ExecResult 执行结果
@@ -69,15 +109,24 @@ func NewService(cfg *config.Config, logger logging.Logger, auditLogger audit.Log
 	if auditLogger == nil {
 		auditLogger = audit.NewNoopLogger()
 	}
-	service := &Service{
-		config:     cfg,
-		logger:     logger,
-		sshManager: ssh.NewManager(cfg, logger),
-		filter:     security.NewFilter(&cfg.Security, logger, auditLogger),
-		audit:      auditLogger,
+	filtersByGroup, hostSecurity, hostIndex, err := buildSecurityCaches(cfg, logger, auditLogger)
+	if err != nil {
+		return nil, err
 	}
 
-	logger.Info("命令执行服务初始化完成")
+	service := &Service{
+		config:         cfg,
+		logger:         logger,
+		sshManager:     ssh.NewManager(cfg, logger),
+		filtersByGroup: filtersByGroup,
+		hostSecurity:   hostSecurity,
+		hostIndex:      hostIndex,
+		audit:          auditLogger,
+	}
+
+	logger.Info("命令执行服务初始化完成",
+		"security_groups", len(filtersByGroup),
+		"hosts", len(hostIndex))
 
 	return service, nil
 }
@@ -94,6 +143,14 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		"args", req.Args,
 		"use_shell", req.Options.UseShell)
 
+	filter, secCfg, err := s.filterForHost(req.HostID)
+	if err != nil {
+		s.logger.Error("无法获取主机安全配置",
+			"host_id", req.HostID,
+			"error", err)
+		return nil, common.WrapError("安全检查失败", err)
+	}
+
 	s.logAudit(ctx, audit.Event{
 		Category: "exec_command",
 		Type:     "command_requested",
@@ -107,7 +164,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"cwd":         req.Options.CWD,
 			"timeout_sec": req.Options.TimeoutSec,
 			"stream":      req.Options.Stream,
-			"enable_pty": req.Options.EnablePTY,
+			"enable_pty":  req.Options.EnablePTY,
 		},
 	})
 
@@ -127,7 +184,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		},
 	}
 
-	if err := s.filter.Check(ctx, securityReq); err != nil {
+	if err := filter.Check(ctx, securityReq); err != nil {
 		s.logger.Error("命令被安全过滤拒绝",
 			"host_id", req.HostID,
 			"command", req.Command,
@@ -177,15 +234,16 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 	}
 
 	// 4. 处理输出截断：避免单个命令输出过大拖垮上层调用者
-	maxOutput := s.config.Security.MaxOutputBytes
+	maxOutput := secCfg.MaxOutputBytes
 	truncated := false
-	if int64(len(output)) > maxOutput {
+	originalLen := len(output)
+	if int64(originalLen) > maxOutput {
 		output = output[:maxOutput]
 		truncated = true
 		s.logger.Warn("输出被截断",
 			"host_id", req.HostID,
 			"command", req.Command,
-			"original_size", len(output),
+			"original_size", originalLen,
 			"max_size", maxOutput)
 	}
 
@@ -215,7 +273,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			"exit_code":   result.ExitCode,
 			"truncated":   result.Truncated,
 			"output_size": len(result.Stdout),
-			"enable_pty": req.Options.EnablePTY,
+			"enable_pty":  req.Options.EnablePTY,
 		},
 	})
 
@@ -232,6 +290,20 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 		"host_id", req.HostID,
 		"script_name", req.ScriptName,
 		"parameters", req.Parameters)
+
+	host, err := s.hostForID(req.HostID)
+	if err != nil {
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "host_missing",
+			HostID:   req.HostID,
+			Target:   req.ScriptName,
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   err.Error(),
+		})
+		return nil, err
+	}
 
 	var paramKeys []string
 	for key := range req.Parameters {
@@ -264,6 +336,49 @@ func (s *Service) ExecuteScript(ctx context.Context, req ScriptRequest) (*ExecRe
 			Reason:   "script definition not found",
 		})
 		return nil, fmt.Errorf("脚本 '%s' 不存在", req.ScriptName)
+	}
+
+	if !isHostAllowedForScript(host.ID, scriptConfig.AllowedHosts) {
+		reason := fmt.Sprintf("host '%s' not allowed", host.ID)
+		s.logger.Warn("脚本执行被 allowed_hosts 限制",
+			"host_id", host.ID,
+			"script_name", scriptConfig.Name,
+			"allowed_hosts", scriptConfig.AllowedHosts)
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "host_not_allowed",
+			HostID:   host.ID,
+			Target:   scriptConfig.Name,
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   reason,
+			Metadata: map[string]interface{}{
+				"allowed_hosts": append([]string(nil), scriptConfig.AllowedHosts...),
+			},
+		})
+		return nil, fmt.Errorf("脚本 '%s' 不允许在主机 '%s' 上执行", scriptConfig.Name, host.ID)
+	}
+
+	if !hostAllowsScriptTag(host.ScriptTags, scriptConfig.Tag) {
+		s.logger.Warn("脚本执行被标签限制",
+			"host_id", host.ID,
+			"script_name", scriptConfig.Name,
+			"script_tag", scriptConfig.Tag,
+			"host_tags", host.ScriptTags)
+		s.logAudit(ctx, audit.Event{
+			Category: "exec_script",
+			Type:     "script_tag_denied",
+			HostID:   host.ID,
+			Target:   scriptConfig.Name,
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   "script tag not allowed",
+			Metadata: map[string]interface{}{
+				"script_tag": scriptConfig.Tag,
+				"host_tags":  append([]string(nil), host.ScriptTags...),
+			},
+		})
+		return nil, fmt.Errorf("脚本 '%s' 标签 '%s' 未获主机 '%s' 授权", scriptConfig.Name, scriptConfig.Tag, host.ID)
 	}
 
 	// 合并用户参数与默认值，确保模板渲染阶段数据齐全
@@ -388,12 +503,87 @@ func (s *Service) logAudit(ctx context.Context, event audit.Event) {
 
 // findScriptConfig 查找脚本配置
 func (s *Service) findScriptConfig(scriptName string) *config.ScriptConfig {
-	for _, script := range s.config.Scripts {
+	for i := range s.config.Scripts {
+		script := &s.config.Scripts[i]
 		if script.Name == scriptName {
-			return &script
+			return script
 		}
 	}
 	return nil
+}
+
+func (s *Service) filterForHost(hostID string) (*security.Filter, *config.SecurityConfig, error) {
+	secCfg, ok := s.hostSecurity[hostID]
+	if !ok {
+		return nil, nil, fmt.Errorf("主机 '%s' 未配置", hostID)
+	}
+	filter, ok := s.filtersByGroup[secCfg.Group]
+	if !ok {
+		return nil, nil, fmt.Errorf("安全组 '%s' 未配置", secCfg.Group)
+	}
+	return filter, secCfg, nil
+}
+
+func (s *Service) hostForID(hostID string) (*config.SSHHost, error) {
+	host, ok := s.hostIndex[hostID]
+	if !ok {
+		return nil, fmt.Errorf("主机 '%s' 未配置", hostID)
+	}
+	return host, nil
+}
+
+func isHostAllowedForScript(hostID string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	for _, pattern := range patterns {
+		p := strings.TrimSpace(pattern)
+		if p == "" {
+			continue
+		}
+		if p == "*" {
+			return true
+		}
+		matched, err := filepath.Match(p, hostID)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func hostAllowsScriptTag(hostTags []string, scriptTag string) bool {
+	normalizedTag := strings.TrimSpace(strings.ToLower(scriptTag))
+	if normalizedTag == "" {
+		return true
+	}
+	for _, tag := range hostTags {
+		clean := strings.TrimSpace(strings.ToLower(tag))
+		if clean == "*" || clean == normalizedTag {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return tags
+	}
+	result := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		clean := strings.TrimSpace(strings.ToLower(tag))
+		if clean == "" {
+			continue
+		}
+		if _, exists := seen[clean]; exists {
+			continue
+		}
+		seen[clean] = struct{}{}
+		result = append(result, clean)
+	}
+	return result
 }
 
 // renderTemplate 使用 text/template 渲染脚本命令。

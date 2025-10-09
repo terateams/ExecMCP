@@ -306,14 +306,22 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
-	defaultPTY := m.config.Security.EnablePTY
+	secCfg, err := m.securityForHost(hostID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	host, err := m.hostByID(hostID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defaultPTY := secCfg.EnablePTY
 	useShell := mcp.ParseBoolean(req, "use_shell", false)
 	enablePTY := mcp.ParseBoolean(req, "enable_pty", defaultPTY)
 	workingDir := mcp.ParseString(req, "working_dir", "")
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
 	timeout := int(timeoutSec.(float64))
 
-	m.logger.Info("收到命令执行请求", "host_id", hostID, "command", command, "args", argsStr, "use_shell", useShell, "enable_pty", enablePTY)
+	m.logger.Info("收到命令执行请求", "host_id", hostID, "host_type", host.Type, "command", command, "args", argsStr, "use_shell", useShell, "enable_pty", enablePTY)
 
 	result, err := m.execService.ExecuteCommand(ctx, execsvc.ExecRequest{
 		HostID:  hostID,
@@ -334,6 +342,9 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 
 	response := map[string]interface{}{
 		"host_id":     hostID,
+		"host_type":   host.Type,
+		"host_description": host.Description,
+		"security_group":   host.SecurityGroup,
 		"command":     command,
 		"args":        argsStr,
 		"exit_code":   result.ExitCode,
@@ -393,9 +404,18 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 	parameters, _ := paramsAny.(map[string]interface{})
 	timeoutSec := mcp.ParseArgument(req, "timeout_sec", 30.0)
 	timeout := int(timeoutSec.(float64))
-	enablePTY := mcp.ParseBoolean(req, "enable_pty", m.config.Security.EnablePTY)
 
-	m.logger.Info("收到脚本执行请求", "host_id", hostID, "script_name", scriptName, "parameters", parameters, "enable_pty", enablePTY)
+	secCfg, err := m.securityForHost(hostID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	enablePTY := mcp.ParseBoolean(req, "enable_pty", secCfg.EnablePTY)
+	host, err := m.hostByID(hostID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	m.logger.Info("收到脚本执行请求", "host_id", hostID, "host_type", host.Type, "script_name", scriptName, "parameters", parameters, "enable_pty", enablePTY)
 
 	result, err := m.execService.ExecuteScript(ctx, execsvc.ScriptRequest{
 		HostID:     hostID,
@@ -414,6 +434,9 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 
 	response := map[string]interface{}{
 		"host_id":     hostID,
+		"host_type":   host.Type,
+		"host_description": host.Description,
+		"security_group":   host.SecurityGroup,
 		"script_name": scriptName,
 		"parameters":  parameters,
 		"exit_code":   result.ExitCode,
@@ -435,15 +458,15 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 	}
 	listType := mcp.ParseString(req, "type", "all")
 
-	sec := m.config.Security
+	sec := m.config.DefaultSecurityConfig()
 	var allowedCommands []string
-	if len(sec.AllowlistExact) > 0 {
+	if sec != nil && len(sec.AllowlistExact) > 0 {
 		allowedCommands = append(allowedCommands, fmt.Sprintf("allowlist_exact: %s", strings.Join(sec.AllowlistExact, ", ")))
 	}
-	if len(sec.AllowlistRegex) > 0 {
+	if sec != nil && len(sec.AllowlistRegex) > 0 {
 		allowedCommands = append(allowedCommands, fmt.Sprintf("allowlist_regex: %s", strings.Join(sec.AllowlistRegex, ", ")))
 	}
-	if len(sec.AllowShellFor) > 0 {
+	if sec != nil && len(sec.AllowShellFor) > 0 {
 		allowedCommands = append(allowedCommands, fmt.Sprintf("allow_shell_for: %s", strings.Join(sec.AllowShellFor, ", ")))
 	}
 
@@ -460,13 +483,15 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 
 	if listType == "all" || listType == "commands" {
 		response["allowed_commands"] = allowedCommands
-		if len(sec.DenylistExact) > 0 {
+		if sec != nil && len(sec.DenylistExact) > 0 {
 			response["denylist_exact"] = append([]string(nil), sec.DenylistExact...)
 		}
-		if len(sec.DenylistRegex) > 0 {
+		if sec != nil && len(sec.DenylistRegex) > 0 {
 			response["denylist_regex"] = append([]string(nil), sec.DenylistRegex...)
 		}
-		response["default_shell"] = sec.DefaultShell
+		if sec != nil {
+			response["default_shell"] = sec.DefaultShell
+		}
 	}
 
 	if listType == "all" || listType == "scripts" {
@@ -479,6 +504,7 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 				"use_shell":     script.UseShell,
 				"working_dir":   script.WorkingDir,
 				"allowed_hosts": script.AllowedHosts,
+				"tag":           script.Tag,
 			}
 
 			var params []map[string]interface{}
@@ -497,6 +523,24 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 			scripts = append(scripts, scriptInfo)
 		}
 		response["scripts"] = scripts
+	}
+
+	if len(m.config.Security) > 0 {
+		var groups []map[string]interface{}
+		for _, secGroup := range m.config.Security {
+			groupInfo := map[string]interface{}{
+				"group":               secGroup.Group,
+				"default_shell":       secGroup.DefaultShell,
+				"enable_pty":          secGroup.EnablePTY,
+				"rate_limit_per_min":  secGroup.RateLimitPerMin,
+				"allow_shell_for":     append([]string(nil), secGroup.AllowShellFor...),
+				"allowlist_exact":     append([]string(nil), secGroup.AllowlistExact...),
+				"denylist_exact":      append([]string(nil), secGroup.DenylistExact...),
+				"working_dir_allow":   append([]string(nil), secGroup.WorkingDirAllow...),
+			}
+			groups = append(groups, groupInfo)
+		}
+		response["security_groups"] = groups
 	}
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")
@@ -522,8 +566,19 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 	}
 
 	m.logger.Info("收到连接测试请求", "host_id", hostID)
+	host, err := m.hostByID(hostID)
+	if err != nil {
+		m.logAudit(ctx, audit.Event{
+			Category: "test_connection",
+			Type:     "unknown_host",
+			Outcome:  audit.OutcomeDenied,
+			Severity: audit.SeverityMedium,
+			Reason:   err.Error(),
+		})
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
-	err := m.sshManager.HealthCheck(hostID)
+	err = m.sshManager.HealthCheck(hostID)
 	if err != nil {
 		m.logger.Error("连接测试失败", "host_id", hostID, "error", err)
 		m.logAudit(ctx, audit.Event{
@@ -537,31 +592,15 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError(fmt.Sprintf("Connection test failed: %v", err)), nil
 	}
 
-	// 查找主机配置
-	var hostConfig *config.SSHHost
-	for _, host := range m.config.SSHHosts {
-		if host.ID == hostID {
-			hostConfig = &host
-			break
-		}
-	}
-
-	if hostConfig == nil {
-		m.logAudit(ctx, audit.Event{
-			Category: "test_connection",
-			Type:     "unknown_host",
-			Outcome:  audit.OutcomeDenied,
-			Severity: audit.SeverityMedium,
-			Reason:   fmt.Sprintf("host not configured: %s", hostID),
-		})
-		return mcp.NewToolResultError(fmt.Sprintf("Host configuration not found: %s", hostID)), nil
-	}
-
 	response := map[string]interface{}{
 		"success":   true,
 		"host_id":   hostID,
 		"status":    "connected",
 		"tested_at": time.Now().Format(time.RFC3339),
+		"host_type": host.Type,
+		"host_description": host.Description,
+		"security_group":   host.SecurityGroup,
+		"script_tags":      append([]string(nil), host.ScriptTags...),
 		"notes":     []string{"SSH 连接正常"},
 	}
 
@@ -581,9 +620,14 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 		hostInfo := map[string]interface{}{
 			"id":                  host.ID,
 			"auth_type":           host.AuthMethod,
+			"user":                host.User,
 			"connect_timeout_sec": host.ConnectTimeout,
 			"keepalive_sec":       host.KeepaliveSec,
 			"max_sessions":        host.MaxSessions,
+			"type":                host.Type,
+			"description":         host.Description,
+			"security_group":      host.SecurityGroup,
+			"script_tags":         append([]string(nil), host.ScriptTags...),
 		}
 
 		hosts = append(hosts, hostInfo)
@@ -602,6 +646,22 @@ func (m *MCPServer) handleListHosts(ctx context.Context, req mcp.CallToolRequest
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")
 	return mcp.NewToolResultText(string(responseJson)), nil
+}
+
+func (m *MCPServer) securityForHost(hostID string) (*config.SecurityConfig, error) {
+	secCfg, ok := m.config.SecurityForHost(hostID)
+	if !ok || secCfg == nil {
+		return nil, fmt.Errorf("host '%s' 未配置或缺少安全组", hostID)
+	}
+	return secCfg, nil
+}
+
+func (m *MCPServer) hostByID(hostID string) (*config.SSHHost, error) {
+	host, ok := m.config.HostByID(hostID)
+	if !ok || host == nil {
+		return nil, fmt.Errorf("host '%s' 未配置", hostID)
+	}
+	return host, nil
 }
 
 func (m *MCPServer) handleApproveCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

@@ -1,0 +1,15 @@
+---
+- id: "prod-1"
+  addr: "10.0.0.11:22"
+  user: "ubuntu"
+  auth_method: "private_key"
+  private_key_path: "~/.ssh/id_rsa"
+  known_hosts: "~/.ssh/known_hosts"
+  connect_timeout_sec: 5
+  keepalive_sec: 30
+  max_sessions: 8
+  type: "linux"
+  description: "生产环境节点"
+  security_group: "default"
+  script_tags: ["default"]
+
