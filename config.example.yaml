@@ -9,10 +9,6 @@ server:
   request_timeout_sec: 30              # 默认请求超时时间
   auth_token: "your-secret-token"      # 认证令牌（可选）
 
-# 可选：外部文件引用（相对或绝对路径），支持拆分大型配置
-# ssh_hosts_includes:
-#   - "configs/ssh_hosts/prod.yaml"
-
 # SSH 主机配置
 ssh_hosts: []
 ssh_hosts_includes:
