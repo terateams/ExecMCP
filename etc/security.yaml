@@ -22,8 +22,8 @@
   enable_pty: false
   rate_limit_per_min: 120
   sudo:
-    enabled: false               # 设置为 true 时自动用 sudo -n 执行 commands 列表
-    commands: ["systemctl"]       # 需要 sudo 的命令，可以按需扩展
+    enabled: true               # 设置为 true 时自动用 sudo -n 执行 commands 列表
+    commands: ["systemctl","docker"]       # 需要 sudo 的命令，可以按需扩展
     command_regex: []             # 或者使用正则，例如: ["^(apt|yum)$"]
     preserve_env: false           # 是否保留环境变量 (sudo -E)
     args: []                      # 额外附加在 sudo 后的参数，例如 ["-H"]

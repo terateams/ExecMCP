@@ -1,5 +1,5 @@
 # ExecMCP Makefile
-.PHONY: help build clean test coverage lint fmt vet run dev
+.PHONY: help build clean test coverage lint fmt vet run dev ansible-mcpops
 
 GOCACHE ?= $(CURDIR)/.gocache
 export GOCACHE
@@ -16,6 +16,7 @@ help:
 	@echo "  vet        - 运行静态检查"
 	@echo "  run        - 运行服务器"
 	@echo "  dev        - 开发模式运行"
+	@echo "  ansible-mcpops - 使用 Ansible 在远程主机创建 mcpops 用户"
 
 # 构建项目
 build:
@@ -129,3 +130,7 @@ update-deps:
 release: clean build-prod test
 	@echo "发布版本构建完成"
 	@ls -la bin/
+
+ansible-mcpops:
+	ansible-playbook -i ansible/inventory.ini ansible/create_mcpops_user.yml --ask-become-pass $(ANSIBLE_ARGS)
+

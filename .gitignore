@@ -65,3 +65,4 @@ __debug_*
 testdata
 logs
 .cache
+/ansible
