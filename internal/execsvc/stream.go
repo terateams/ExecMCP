@@ -107,6 +107,15 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 		return nil, fmt.Errorf("安全检查失败: %w", err)
 	}
 
+	effectiveCommand, effectiveArgs, elevationMode, elevated := filter.ApplyElevation(req.Command, req.Args)
+	if elevated {
+		sm.logger.Info("流式命令将以提权方式执行",
+			"host_id", req.HostID,
+			"original_command", req.Command,
+			"effective_command", effectiveCommand,
+			"elevation_mode", elevationMode)
+	}
+
 	// 2. 获取 SSH 会话
 	session, err := sm.sshManager.GetSession(req.HostID)
 	if err != nil {
@@ -130,12 +139,16 @@ func (sm *StreamManager) ExecuteCommandWithStream(ctx context.Context, req ExecR
 		maxOutput: secCfg.MaxOutputBytes,
 	}
 
+	effectiveReq := req
+	effectiveReq.Command = effectiveCommand
+	effectiveReq.Args = effectiveArgs
+
 	// 5. 异步执行命令
-	go sm.executeCommandAsync(streamCtx, stream, req, session)
+	go sm.executeCommandAsync(streamCtx, stream, effectiveReq, session)
 
 	sm.logger.Info("流式命令已启动",
-		"host_id", req.HostID,
-		"command", req.Command,
+		"host_id", effectiveReq.HostID,
+		"command", effectiveReq.Command,
 		"duration_ms", time.Since(startTime).Milliseconds())
 
 	return stream, nil

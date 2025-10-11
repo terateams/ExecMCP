@@ -341,18 +341,22 @@ func (m *MCPServer) handleExecCommand(ctx context.Context, req mcp.CallToolReque
 	}
 
 	response := map[string]interface{}{
-		"host_id":     hostID,
-		"host_type":   host.Type,
-		"host_description": host.Description,
-		"security_group":   host.SecurityGroup,
-		"command":     command,
-		"args":        argsStr,
-		"exit_code":   result.ExitCode,
-		"stdout":      result.Stdout,
-		"stderr":      result.Stderr,
-		"success":     result.ExitCode == 0,
-		"duration_ms": result.DurationMs,
-		"truncated":   result.Truncated,
+		"host_id":           hostID,
+		"host_type":         host.Type,
+		"host_description":  host.Description,
+		"security_group":    host.SecurityGroup,
+		"command":           command,
+		"args":              argsStr,
+		"effective_command": result.EffectiveCommand,
+		"effective_args":    result.EffectiveArgs,
+		"elevation_mode":    result.ElevationMode,
+		"elevation_applied": result.ElevationApplied,
+		"exit_code":         result.ExitCode,
+		"stdout":            result.Stdout,
+		"stderr":            result.Stderr,
+		"success":           result.ExitCode == 0,
+		"duration_ms":       result.DurationMs,
+		"truncated":         result.Truncated,
 	}
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")
@@ -433,18 +437,22 @@ func (m *MCPServer) handleExecScript(ctx context.Context, req mcp.CallToolReques
 	}
 
 	response := map[string]interface{}{
-		"host_id":     hostID,
-		"host_type":   host.Type,
-		"host_description": host.Description,
-		"security_group":   host.SecurityGroup,
-		"script_name": scriptName,
-		"parameters":  parameters,
-		"exit_code":   result.ExitCode,
-		"stdout":      result.Stdout,
-		"stderr":      result.Stderr,
-		"success":     result.ExitCode == 0,
-		"duration_ms": result.DurationMs,
-		"truncated":   result.Truncated,
+		"host_id":           hostID,
+		"host_type":         host.Type,
+		"host_description":  host.Description,
+		"security_group":    host.SecurityGroup,
+		"script_name":       scriptName,
+		"parameters":        parameters,
+		"effective_command": result.EffectiveCommand,
+		"effective_args":    result.EffectiveArgs,
+		"elevation_mode":    result.ElevationMode,
+		"elevation_applied": result.ElevationApplied,
+		"exit_code":         result.ExitCode,
+		"stdout":            result.Stdout,
+		"stderr":            result.Stderr,
+		"success":           result.ExitCode == 0,
+		"duration_ms":       result.DurationMs,
+		"truncated":         result.Truncated,
 	}
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")
@@ -529,14 +537,14 @@ func (m *MCPServer) handleListCommands(ctx context.Context, req mcp.CallToolRequ
 		var groups []map[string]interface{}
 		for _, secGroup := range m.config.Security {
 			groupInfo := map[string]interface{}{
-				"group":               secGroup.Group,
-				"default_shell":       secGroup.DefaultShell,
-				"enable_pty":          secGroup.EnablePTY,
-				"rate_limit_per_min":  secGroup.RateLimitPerMin,
-				"allow_shell_for":     append([]string(nil), secGroup.AllowShellFor...),
-				"allowlist_exact":     append([]string(nil), secGroup.AllowlistExact...),
-				"denylist_exact":      append([]string(nil), secGroup.DenylistExact...),
-				"working_dir_allow":   append([]string(nil), secGroup.WorkingDirAllow...),
+				"group":              secGroup.Group,
+				"default_shell":      secGroup.DefaultShell,
+				"enable_pty":         secGroup.EnablePTY,
+				"rate_limit_per_min": secGroup.RateLimitPerMin,
+				"allow_shell_for":    append([]string(nil), secGroup.AllowShellFor...),
+				"allowlist_exact":    append([]string(nil), secGroup.AllowlistExact...),
+				"denylist_exact":     append([]string(nil), secGroup.DenylistExact...),
+				"working_dir_allow":  append([]string(nil), secGroup.WorkingDirAllow...),
 			}
 			groups = append(groups, groupInfo)
 		}
@@ -593,15 +601,15 @@ func (m *MCPServer) handleTestConnection(ctx context.Context, req mcp.CallToolRe
 	}
 
 	response := map[string]interface{}{
-		"success":   true,
-		"host_id":   hostID,
-		"status":    "connected",
-		"tested_at": time.Now().Format(time.RFC3339),
-		"host_type": host.Type,
+		"success":          true,
+		"host_id":          hostID,
+		"status":           "connected",
+		"tested_at":        time.Now().Format(time.RFC3339),
+		"host_type":        host.Type,
 		"host_description": host.Description,
 		"security_group":   host.SecurityGroup,
 		"script_tags":      append([]string(nil), host.ScriptTags...),
-		"notes":     []string{"SSH 连接正常"},
+		"notes":            []string{"SSH 连接正常"},
 	}
 
 	responseJson, _ := json.MarshalIndent(response, "", "  ")

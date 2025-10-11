@@ -216,6 +216,51 @@ func TestFilter_Check_Allowlist(t *testing.T) {
 	}
 }
 
+func TestFilter_ApplyElevation_WithSudo(t *testing.T) {
+	cfg := &config.SecurityConfig{
+		AllowlistExact: []string{"systemctl", "echo"},
+		Sudo: &config.SudoConfig{
+			Enabled:     true,
+			Commands:    []string{"systemctl"},
+			PreserveEnv: true,
+		},
+	}
+
+	filter := NewFilter(cfg, logging.NewLogger(config.LoggingConfig{}), audit.NewNoopLogger())
+
+	command, args, mode, elevated := filter.ApplyElevation("systemctl", []string{"restart", "nginx"})
+	if !elevated {
+		t.Fatalf("期望 systemctl 被标记为需要提权")
+	}
+	if mode != "sudo" {
+		t.Fatalf("期望提权模式为 sudo，得到 %s", mode)
+	}
+	if command != "sudo" {
+		t.Fatalf("期望实际执行命令为 sudo，得到 %s", command)
+	}
+
+	expectedArgs := []string{"-n", "-E", "systemctl", "restart", "nginx"}
+	if len(args) != len(expectedArgs) {
+		t.Fatalf("期望参数长度为 %d，得到 %d: %v", len(expectedArgs), len(args), args)
+	}
+	for i, val := range expectedArgs {
+		if args[i] != val {
+			t.Fatalf("第 %d 个参数期望 %s，得到 %s", i, val, args[i])
+		}
+	}
+
+	noElevatedCommand, noElevatedArgs, _, noElevation := filter.ApplyElevation("echo", []string{"hello"})
+	if noElevation {
+		t.Fatalf("不在 sudo 列表的命令不应被提权")
+	}
+	if noElevatedCommand != "echo" {
+		t.Fatalf("命令应保持不变，得到 %s", noElevatedCommand)
+	}
+	if len(noElevatedArgs) != 1 || noElevatedArgs[0] != "hello" {
+		t.Fatalf("参数应保持不变，得到 %v", noElevatedArgs)
+	}
+}
+
 func TestFilter_TemporaryApprovalBypassesAllowlist(t *testing.T) {
 	cfg := &config.SecurityConfig{
 		AllowlistExact: []string{"ls"},

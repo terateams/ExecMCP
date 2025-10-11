@@ -65,18 +65,30 @@ type SSHHost struct {
 // SecurityConfig 安全过滤和访问控制配置
 // 实现多层安全过滤机制，包括命令黑名单、白名单、参数验证等
 type SecurityConfig struct {
-	Group           string   `yaml:"group"`              // 安全策略分组名称
-	DefaultShell    bool     `yaml:"default_shell"`      // 默认是否使用 shell 执行命令（false=直接执行，更安全）
-	AllowShellFor   []string `yaml:"allow_shell_for"`    // 允许使用 shell 的命令列表
-	DenylistExact   []string `yaml:"denylist_exact"`     // 精确匹配的黑名单命令（如 rm, dd, mkfs 等）
-	DenylistRegex   []string `yaml:"denylist_regex"`     // 正则表达式黑名单（阻止危险命令模式）
-	ArgDenyRegex    []string `yaml:"arg_deny_regex"`     // 参数正则黑名单（阻止危险参数如 --force）
-	AllowlistExact  []string `yaml:"allowlist_exact"`    // 精确匹配的白名单命令（允许的安全命令）
-	AllowlistRegex  []string `yaml:"allowlist_regex"`    // 正则表达式白名单（允许的命令模式）
-	WorkingDirAllow []string `yaml:"working_dir_allow"`  // 允许的工作目录列表（防止目录遍历攻击）
-	MaxOutputBytes  int64    `yaml:"max_output_bytes"`   // 命令输出最大字节数（防止内存耗尽）
-	EnablePTY       bool     `yaml:"enable_pty"`         // 是否启用伪终端（某些交互式命令需要）
-	RateLimitPerMin int      `yaml:"rate_limit_per_min"` // 每分钟每个主机的请求限制
+	Group           string      `yaml:"group"`              // 安全策略分组名称
+	DefaultShell    bool        `yaml:"default_shell"`      // 默认是否使用 shell 执行命令（false=直接执行，更安全）
+	AllowShellFor   []string    `yaml:"allow_shell_for"`    // 允许使用 shell 的命令列表
+	DenylistExact   []string    `yaml:"denylist_exact"`     // 精确匹配的黑名单命令（如 rm, dd, mkfs 等）
+	DenylistRegex   []string    `yaml:"denylist_regex"`     // 正则表达式黑名单（阻止危险命令模式）
+	ArgDenyRegex    []string    `yaml:"arg_deny_regex"`     // 参数正则黑名单（阻止危险参数如 --force）
+	AllowlistExact  []string    `yaml:"allowlist_exact"`    // 精确匹配的白名单命令（允许的安全命令）
+	AllowlistRegex  []string    `yaml:"allowlist_regex"`    // 正则表达式白名单（允许的命令模式）
+	WorkingDirAllow []string    `yaml:"working_dir_allow"`  // 允许的工作目录列表（防止目录遍历攻击）
+	MaxOutputBytes  int64       `yaml:"max_output_bytes"`   // 命令输出最大字节数（防止内存耗尽）
+	EnablePTY       bool        `yaml:"enable_pty"`         // 是否启用伪终端（某些交互式命令需要）
+	RateLimitPerMin int         `yaml:"rate_limit_per_min"` // 每分钟每个主机的请求限制
+	Sudo            *SudoConfig `yaml:"sudo"`               // Sudo 提权配置
+}
+
+// SudoConfig 描述需要通过 sudo 提权执行的命令列表及附加参数
+type SudoConfig struct {
+	Enabled        bool     `yaml:"enabled"`         // 是否启用 sudo 提权逻辑
+	Commands       []string `yaml:"commands"`        // 需要 sudo 的命令精确列表
+	CommandRegex   []string `yaml:"command_regex"`   // 需要 sudo 的命令正则列表
+	Binary         string   `yaml:"binary"`          // sudo 可执行文件路径，默认 sudo
+	Args           []string `yaml:"args"`            // 调用 sudo 时需要追加的固定参数
+	NonInteractive *bool    `yaml:"non_interactive"` // 是否添加 -n 参数，默认 true
+	PreserveEnv    bool     `yaml:"preserve_env"`    // 是否添加 -E 参数保留环境变量
 }
 
 // ScriptConfig 预定义脚本配置
@@ -240,6 +252,15 @@ func setDefaults(config *Config) {
 		if sec.RateLimitPerMin == 0 {
 			sec.RateLimitPerMin = 120 // 默认每分钟 120 次请求
 		}
+		if sec.Sudo != nil && sec.Sudo.Enabled {
+			if strings.TrimSpace(sec.Sudo.Binary) == "" {
+				sec.Sudo.Binary = "sudo"
+			}
+			if sec.Sudo.NonInteractive == nil {
+				defaultNonInteractive := true
+				sec.Sudo.NonInteractive = &defaultNonInteractive
+			}
+		}
 	}
 
 	defaultGroup := config.Security[0].Group
@@ -314,6 +335,14 @@ func validate(config *Config) error {
 			return fmt.Errorf("security group '%s' 重复定义", sec.Group)
 		}
 		securityGroups[sec.Group] = struct{}{}
+		if sec.Sudo != nil && sec.Sudo.Enabled {
+			if len(sec.Sudo.Commands) == 0 && len(sec.Sudo.CommandRegex) == 0 {
+				return fmt.Errorf("security group '%s' 启用了 sudo 但未配置 commands 或 command_regex", sec.Group)
+			}
+			if strings.TrimSpace(sec.Sudo.Binary) == "" {
+				return fmt.Errorf("security group '%s' 启用了 sudo 但未配置有效的 sudo.binary", sec.Group)
+			}
+		}
 	}
 
 	defaultGroup := config.Security[0].Group

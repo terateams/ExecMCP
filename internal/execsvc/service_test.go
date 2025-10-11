@@ -203,6 +203,44 @@ func TestService_ExecuteScript_ScriptTagRestrictions(t *testing.T) {
 	}
 }
 
+func TestService_ExecuteCommand_WithSudoElevation(t *testing.T) {
+	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.Security[0].AllowlistExact = append(cfg.Security[0].AllowlistExact, "systemctl")
+		cfg.Security[0].Sudo = &config.SudoConfig{
+			Enabled:  true,
+			Commands: []string{"systemctl"},
+			Args:     []string{"-H"},
+		}
+	})
+
+	result, err := svc.ExecuteCommand(context.Background(), ExecRequest{
+		HostID:  "test-host",
+		Command: "systemctl",
+		Args:    []string{"restart", "nginx"},
+	})
+	if err != nil {
+		t.Fatalf("期望带有 sudo 的命令执行成功，但得到错误: %v", err)
+	}
+
+	if result.ElevationMode != "sudo" || !result.ElevationApplied {
+		t.Fatalf("期望命令使用 sudo 提权执行，结果: mode=%s applied=%v", result.ElevationMode, result.ElevationApplied)
+	}
+
+	if result.EffectiveCommand != "sudo" {
+		t.Fatalf("期望有效执行命令为 sudo，得到 %s", result.EffectiveCommand)
+	}
+
+	expectedArgs := []string{"-n", "-H", "systemctl", "restart", "nginx"}
+	if len(result.EffectiveArgs) != len(expectedArgs) {
+		t.Fatalf("期望参数长度为 %d，得到 %d: %v", len(expectedArgs), len(result.EffectiveArgs), result.EffectiveArgs)
+	}
+	for idx, val := range expectedArgs {
+		if result.EffectiveArgs[idx] != val {
+			t.Fatalf("第 %d 个参数期望 %s，得到 %s", idx, val, result.EffectiveArgs[idx])
+		}
+	}
+}
+
 func TestService_ExecuteScript_AllowedHostsRestrictions(t *testing.T) {
 	svc := newTestServiceWithConfig(t, func(cfg *config.Config) {
 		cfg.Scripts = []config.ScriptConfig{

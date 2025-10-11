@@ -21,6 +21,7 @@ type Filter struct {
 	denylistRegex  []compiledPattern
 	argDenyRegex   []compiledPattern
 	allowlistRegex []compiledPattern
+	sudoRules      *sudoRules
 }
 
 type compiledPattern struct {
@@ -59,6 +60,7 @@ func NewFilter(cfg *config.SecurityConfig, logger logging.Logger, auditLogger au
 		denylistRegex:  compilePatterns(cfg.DenylistRegex),
 		argDenyRegex:   compilePatterns(cfg.ArgDenyRegex),
 		allowlistRegex: compilePatterns(cfg.AllowlistRegex),
+		sudoRules:      newSudoRules(cfg.Sudo),
 	}
 }
 
@@ -310,6 +312,104 @@ func (f *Filter) Check(ctx context.Context, req ExecRequest) error {
 
 	// 8. 通过所有检查
 	return nil
+}
+
+// ApplyElevation 根据安全策略判断是否需要对命令进行提权，例如自动加入 sudo。
+// 返回值依次为：实际执行的命令、参数、提权模式（为空表示未提权）、是否应用过提权。
+func (f *Filter) ApplyElevation(command string, args []string) (string, []string, string, bool) {
+	if command == "" {
+		return command, append([]string(nil), args...), "", false
+	}
+
+	if f.sudoRules == nil {
+		return command, append([]string(nil), args...), "", false
+	}
+
+	return f.sudoRules.apply(command, args)
+}
+
+type sudoRules struct {
+	enabled  bool
+	binary   string
+	preArgs  []string
+	commands map[string]struct{}
+	regex    []compiledPattern
+	mode     string
+}
+
+func newSudoRules(cfg *config.SudoConfig) *sudoRules {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+
+	binary := strings.TrimSpace(cfg.Binary)
+	if binary == "" {
+		binary = "sudo"
+	}
+
+	sr := &sudoRules{
+		enabled:  true,
+		binary:   binary,
+		preArgs:  make([]string, 0, len(cfg.Args)+2),
+		commands: make(map[string]struct{}),
+		regex:    compilePatterns(cfg.CommandRegex),
+		mode:     "sudo",
+	}
+
+	nonInteractive := true
+	if cfg.NonInteractive != nil {
+		nonInteractive = *cfg.NonInteractive
+	}
+	if nonInteractive {
+		sr.preArgs = append(sr.preArgs, "-n")
+	}
+	if cfg.PreserveEnv {
+		sr.preArgs = append(sr.preArgs, "-E")
+	}
+	for _, arg := range cfg.Args {
+		if trimmed := strings.TrimSpace(arg); trimmed != "" {
+			sr.preArgs = append(sr.preArgs, trimmed)
+		}
+	}
+	for _, cmd := range cfg.Commands {
+		if trimmed := strings.TrimSpace(cmd); trimmed != "" {
+			sr.commands[trimmed] = struct{}{}
+		}
+	}
+
+	return sr
+}
+
+func (s *sudoRules) shouldElevate(command string) bool {
+	if !s.enabled {
+		return false
+	}
+	if command == "" || command == s.binary {
+		return false
+	}
+	if _, ok := s.commands[command]; ok {
+		return true
+	}
+	for _, pattern := range s.regex {
+		if pattern.re.MatchString(command) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sudoRules) apply(command string, args []string) (string, []string, string, bool) {
+	copiedArgs := append([]string(nil), args...)
+	if !s.shouldElevate(command) {
+		return command, copiedArgs, "", false
+	}
+
+	finalArgs := make([]string, 0, len(s.preArgs)+1+len(copiedArgs))
+	finalArgs = append(finalArgs, s.preArgs...)
+	finalArgs = append(finalArgs, command)
+	finalArgs = append(finalArgs, copiedArgs...)
+
+	return s.binary, finalArgs, s.mode, true
 }
 
 // SecurityError 安全错误

@@ -70,11 +70,15 @@ func buildSecurityCaches(cfg *config.Config, logger logging.Logger, auditLogger 
 
 // ExecResult 执行结果
 type ExecResult struct {
-	ExitCode   int    `json:"exit_code"`
-	Stdout     string `json:"stdout"`
-	Stderr     string `json:"stderr"`
-	Truncated  bool   `json:"truncated"`
-	DurationMs int64  `json:"duration_ms"`
+	ExitCode         int      `json:"exit_code"`
+	Stdout           string   `json:"stdout"`
+	Stderr           string   `json:"stderr"`
+	Truncated        bool     `json:"truncated"`
+	DurationMs       int64    `json:"duration_ms"`
+	EffectiveCommand string   `json:"effective_command"`
+	EffectiveArgs    []string `json:"effective_args"`
+	ElevationMode    string   `json:"elevation_mode"`
+	ElevationApplied bool     `json:"elevation_applied"`
 }
 
 // ExecRequest 执行请求
@@ -151,23 +155,6 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		return nil, common.WrapError("安全检查失败", err)
 	}
 
-	s.logAudit(ctx, audit.Event{
-		Category: "exec_command",
-		Type:     "command_requested",
-		HostID:   req.HostID,
-		Target:   req.Command,
-		Outcome:  audit.OutcomeUnknown,
-		Severity: audit.SeverityInfo,
-		Metadata: map[string]interface{}{
-			"args":        append([]string(nil), req.Args...),
-			"use_shell":   req.Options.UseShell,
-			"cwd":         req.Options.CWD,
-			"timeout_sec": req.Options.TimeoutSec,
-			"stream":      req.Options.Stream,
-			"enable_pty":  req.Options.EnablePTY,
-		},
-	})
-
 	// 1. 安全过滤：所有入口统一走安全策略，确保命令、参数和工作目录符合配置
 	securityReq := security.ExecRequest{
 		HostID:  req.HostID,
@@ -192,6 +179,39 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		return nil, common.WrapError("安全检查失败", err)
 	}
 
+	effectiveCommand, effectiveArgs, elevationMode, elevated := filter.ApplyElevation(req.Command, req.Args)
+
+	if elevated {
+		s.logger.Info("命令将以提权方式执行",
+			"host_id", req.HostID,
+			"original_command", req.Command,
+			"effective_command", effectiveCommand,
+			"elevation_mode", elevationMode)
+	}
+
+	auditMetadata := map[string]interface{}{
+		"args":              append([]string(nil), req.Args...),
+		"use_shell":         req.Options.UseShell,
+		"cwd":               req.Options.CWD,
+		"timeout_sec":       req.Options.TimeoutSec,
+		"stream":            req.Options.Stream,
+		"enable_pty":        req.Options.EnablePTY,
+		"effective_command": effectiveCommand,
+		"effective_args":    append([]string(nil), effectiveArgs...),
+		"elevation_mode":    elevationMode,
+		"elevation_applied": elevated,
+	}
+
+	s.logAudit(ctx, audit.Event{
+		Category: "exec_command",
+		Type:     "command_requested",
+		HostID:   req.HostID,
+		Target:   req.Command,
+		Outcome:  audit.OutcomeUnknown,
+		Severity: audit.SeverityInfo,
+		Metadata: auditMetadata,
+	})
+
 	// 2. 获取 SSH 会话：通过连接管理器拿到复用的 SSH 会话，失败直接终止
 	session, err := s.sshManager.GetSession(req.HostID)
 	if err != nil {
@@ -206,17 +226,24 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			Outcome:  audit.OutcomeError,
 			Severity: audit.SeverityHigh,
 			Reason:   err.Error(),
+			Metadata: map[string]interface{}{
+				"effective_command": effectiveCommand,
+				"effective_args":    append([]string(nil), effectiveArgs...),
+				"elevation_mode":    elevationMode,
+				"elevation_applied": elevated,
+			},
 		})
 		return nil, common.SSHError("获取会话", req.HostID, err)
 	}
 	defer s.sshManager.ReleaseSession(req.HostID, session)
 
 	// 3. 执行命令
-	output, err := session.ExecuteCommand(req.Command, req.Args, req.Options.EnablePTY)
+	output, err := session.ExecuteCommand(effectiveCommand, effectiveArgs, req.Options.EnablePTY)
 	if err != nil {
 		s.logger.Error("命令执行失败",
 			"host_id", req.HostID,
-			"command", req.Command,
+			"command", effectiveCommand,
+			"original_command", req.Command,
 			"error", err)
 		s.logAudit(ctx, audit.Event{
 			Category: "exec_command",
@@ -227,7 +254,11 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 			Severity: audit.SeverityHigh,
 			Reason:   err.Error(),
 			Metadata: map[string]interface{}{
-				"args": append([]string(nil), req.Args...),
+				"args":              append([]string(nil), req.Args...),
+				"effective_command": effectiveCommand,
+				"effective_args":    append([]string(nil), effectiveArgs...),
+				"elevation_mode":    elevationMode,
+				"elevation_applied": elevated,
 			},
 		})
 		return nil, common.SSHError("命令执行", req.HostID, err)
@@ -242,24 +273,32 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		truncated = true
 		s.logger.Warn("输出被截断",
 			"host_id", req.HostID,
-			"command", req.Command,
+			"command", effectiveCommand,
+			"original_command", req.Command,
 			"original_size", originalLen,
 			"max_size", maxOutput)
 	}
 
 	result := &ExecResult{
-		ExitCode:   0, // 成功路径下默认视为 0，失败场景会在上方直接返回 error
-		Stdout:     output,
-		Stderr:     "",
-		Truncated:  truncated,
-		DurationMs: time.Since(startTime).Milliseconds(),
+		ExitCode:         0, // 成功路径下默认视为 0，失败场景会在上方直接返回 error
+		Stdout:           output,
+		Stderr:           "",
+		Truncated:        truncated,
+		DurationMs:       time.Since(startTime).Milliseconds(),
+		EffectiveCommand: effectiveCommand,
+		EffectiveArgs:    append([]string(nil), effectiveArgs...),
+		ElevationMode:    elevationMode,
+		ElevationApplied: elevated,
 	}
 
 	s.logger.Info("命令执行完成",
 		"host_id", req.HostID,
 		"exit_code", result.ExitCode,
 		"duration_ms", result.DurationMs,
-		"truncated", result.Truncated)
+		"truncated", result.Truncated,
+		"command", effectiveCommand,
+		"original_command", req.Command,
+		"elevation_mode", elevationMode)
 
 	s.logAudit(ctx, audit.Event{
 		Category: "exec_command",
@@ -269,11 +308,15 @@ func (s *Service) ExecuteCommand(ctx context.Context, req ExecRequest) (*ExecRes
 		Outcome:  audit.OutcomeSuccess,
 		Severity: audit.SeverityInfo,
 		Metadata: map[string]interface{}{
-			"duration_ms": result.DurationMs,
-			"exit_code":   result.ExitCode,
-			"truncated":   result.Truncated,
-			"output_size": len(result.Stdout),
-			"enable_pty":  req.Options.EnablePTY,
+			"duration_ms":       result.DurationMs,
+			"exit_code":         result.ExitCode,
+			"truncated":         result.Truncated,
+			"output_size":       len(result.Stdout),
+			"enable_pty":        req.Options.EnablePTY,
+			"effective_command": effectiveCommand,
+			"effective_args":    append([]string(nil), effectiveArgs...),
+			"elevation_mode":    elevationMode,
+			"elevation_applied": elevated,
 		},
 	})
 
