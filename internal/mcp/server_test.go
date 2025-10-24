@@ -143,6 +143,10 @@ func TestNewMCPServer(t *testing.T) {
 		t.Error("期望 SSE 服务器被正确创建")
 	}
 
+	if server.streamServer == nil {
+		t.Error("期望 HTTP 流式服务器被正确创建")
+	}
+
 	if server.execService == nil {
 		t.Error("期望执行服务被正确创建")
 	}
@@ -447,7 +451,48 @@ func TestHandleTestConnectionIncludesMetadata(t *testing.T) {
 	}
 }
 
-func TestMCPServer_SSLEndpoint(t *testing.T) {
+func TestMCPServer_StreamableEndpoint(t *testing.T) {
+	cfg := newMCPTestConfig()
+	cfg.Server.BindAddr = "127.0.0.1:0"
+	cfg.SSHHosts[0].AuthMethod = "password"
+	cfg.SSHHosts[0].Password = "testpass"
+	cfg.SSHHosts[0].PrivateKeyPath = ""
+
+	logger := logging.NewLogger(cfg.Logging)
+	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
+	if err != nil {
+		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.streamServer.ServeHTTP(recorder, req)
+	}()
+
+	// 等待 SSE 处理器写入初始响应后再关闭
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	wg.Wait()
+
+	resp := recorder.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("期望状态码 200，但得到 %d", resp.StatusCode)
+	}
+
+	if contentType := resp.Header.Get("Content-Type"); contentType != "text/event-stream" {
+		t.Errorf("期望 Content-Type 为 text/event-stream，但得到 %s", contentType)
+	}
+}
+
+func TestMCPServer_SSEEndpoint(t *testing.T) {
 	cfg := newMCPTestConfig()
 	cfg.Server.BindAddr = "127.0.0.1:0"
 	cfg.SSHHosts[0].AuthMethod = "password"
@@ -468,7 +513,7 @@ func TestMCPServer_SSLEndpoint(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		server.sseServer.ServeHTTP(recorder, req)
+		server.sseServer.SSEHandler().ServeHTTP(recorder, req)
 	}()
 
 	// 等待 SSE 处理器写入初始响应后再关闭
@@ -614,7 +659,7 @@ func TestMCPServer_InvalidConfig(t *testing.T) {
 	logger := logging.NewLogger(cfg.Logging)
 	server, err := NewMCPServer(cfg, logger, audit.NewNoopLogger())
 
-	// 即使配置有问题，服务器也应该能创建（因为 SSE 服务器会在 Start 时才绑定端口）
+	// 即使配置有问题，服务器也应该能创建（因为 HTTP 流式服务器会在 Start 时才绑定端口）
 	if err != nil {
 		t.Fatalf("期望即使配置有问题也能创建服务器，但得到错误: %v", err)
 	}
@@ -647,7 +692,7 @@ func TestMCPServer_MissingSSHHosts(t *testing.T) {
 	}
 }
 
-func TestMCPServer_SSEServerCreation(t *testing.T) {
+func TestMCPServer_StreamServerCreation(t *testing.T) {
 	cfg := newMCPTestConfig()
 	cfg.Server.BindAddr = "127.0.0.1:8080"
 
@@ -658,13 +703,17 @@ func TestMCPServer_SSEServerCreation(t *testing.T) {
 		t.Fatalf("期望创建服务器成功，但得到错误: %v", err)
 	}
 
+	if server.streamServer == nil {
+		t.Fatal("期望 HTTP 流式服务器被创建")
+	}
+
 	if server.sseServer == nil {
 		t.Fatal("期望 SSE 服务器被创建")
 	}
 
-	// 检查 SSE 服务器配置
-	if server.sseServer == nil {
-		t.Fatal("期望 SSE 服务器不为 nil")
+	// 检查 HTTP 流式服务器配置
+	if server.streamServer == nil {
+		t.Fatal("期望 HTTP 流式服务器不为 nil")
 	}
 }
 

@@ -69,7 +69,7 @@ func printUsage() {
 	fmt.Println("  help              Show this help message")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
-	fmt.Println("  EXECMCP_MCP_SERVER_URL    Server URL (default: http://localhost:8081/mcp/sse)")
+	fmt.Println("  EXECMCP_MCP_SERVER_URL    Server URL (default: http://localhost:8081/mcp)")
 	fmt.Println("  EXECMCP_MCP_HOST_ID       Host ID for testing (default: test-host)")
 	fmt.Println("  EXECMCP_MCP_COMMAND       Command to execute (default: whoami)")
 	fmt.Println("  EXECMCP_MCP_ARGS          Command arguments (comma-separated)")
@@ -84,12 +84,12 @@ func printUsage() {
 	fmt.Println("  go run cmd/mcptest/main.go list-commands scripts")
 	fmt.Println("  go run cmd/mcptest/main.go exec")
 	fmt.Println("  EXECMCP_MCP_LIST_TYPE=commands go run cmd/mcptest/main.go list-commands")
-	fmt.Println("  EXECMCP_MCP_SERVER_URL=http://localhost:8081/mcp/sse EXECMCP_MCP_HOST_ID=test-host go run cmd/mcptest/main.go exec")
+	fmt.Println("  EXECMCP_MCP_SERVER_URL=http://localhost:8081/mcp EXECMCP_MCP_HOST_ID=test-host go run cmd/mcptest/main.go exec")
 }
 
 func getTestConfig() TestConfig {
 	cfg := TestConfig{
-		ServerURL: common.GetEnv(envconfig.EnvMCPServerURL, "http://localhost:8081/mcp/sse"),
+		ServerURL: common.GetEnv(envconfig.EnvMCPServerURL, "http://localhost:8081/mcp"),
 		HostID:    common.GetEnv(envconfig.EnvMCPHostID, "test-host"),
 		Command:   common.GetEnv(envconfig.EnvMCPCommand, "whoami"),
 		UseShell:  common.GetEnvBool(envconfig.EnvMCPUseShell, false),
@@ -108,8 +108,8 @@ func getTestConfig() TestConfig {
 func createClient() (*client.Client, error) {
 	config := getTestConfig()
 
-	// Create MCP client with SSE transport
-	mcpClient, err := client.NewSSEMCPClient(config.ServerURL)
+	// Create MCP client with HTTP streaming transport
+	mcpClient, err := client.NewStreamableHttpClient(config.ServerURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}

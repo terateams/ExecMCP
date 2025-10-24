@@ -27,6 +27,7 @@ type MCPServer struct {
 	audit         audit.Logger
 	server        *server.MCPServer
 	sseServer     *server.SSEServer
+	streamServer  *server.StreamableHTTPServer
 	execService   *execsvc.Service
 	sshManager    ssh.Manager
 	tempApprovals *temporaryApprovalCache
@@ -68,15 +69,34 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 	// 注册工具
 	mcp.registerTools()
 
-	// 创建 SSE 服务器
+	// 初始化共享 HTTP 服务器
+	httpMux := http.NewServeMux()
+	httpServer := &http.Server{
+		Handler: httpMux,
+	}
+
+	// 创建 HTTP 流式服务器
 	baseURL := strings.TrimSpace(cfg.Server.PublicBaseURL)
 	if baseURL == "" {
 		baseURL = config.DefaultPublicBaseURL(cfg.Server.BindAddr)
 	}
+	mcp.streamServer = server.NewStreamableHTTPServer(
+		mcpServer,
+		server.WithEndpointPath("/mcp"),
+		server.WithStreamableHTTPServer(httpServer),
+		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			ip := remoteIPFromRequest(r)
+			if ip != "" {
+				ctx = context.WithValue(ctx, remoteAddrContextKey{}, ip)
+			}
+			return ctx
+		}),
+	)
 	mcp.sseServer = server.NewSSEServer(
 		mcpServer,
 		server.WithBaseURL(baseURL),
 		server.WithStaticBasePath("/mcp"),
+		server.WithHTTPServer(httpServer),
 		server.WithSSEContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			ip := remoteIPFromRequest(r)
 			if ip != "" {
@@ -85,6 +105,14 @@ func NewMCPServer(cfg *config.Config, logger logging.Logger, auditLogger audit.L
 			return ctx
 		}),
 	)
+	mcp.logger.Info("MCP HTTP 流式端点", "base_url", baseURL, "path", "/mcp")
+	mcp.logger.Info("MCP SSE 端点", "sse_path", "/mcp/sse", "message_path", "/mcp/message")
+
+	// 注册路由到共享 mux
+	httpMux.Handle("/mcp", mcp.streamServer)
+	httpMux.Handle("/mcp/", mcp.streamServer)
+	httpMux.Handle("/mcp/sse", mcp.sseServer.SSEHandler())
+	httpMux.Handle("/mcp/message", mcp.sseServer.MessageHandler())
 
 	logger.Info("MCP 服务器初始化完成",
 		"ssh_hosts_count", len(cfg.SSHHosts),
@@ -214,12 +242,12 @@ func (m *MCPServer) registerTools() {
 
 // Start 启动 MCP 服务器
 func (m *MCPServer) Start(ctx context.Context) error {
-	m.logger.Info("启动 MCP SSE 服务器", "address", m.config.Server.BindAddr)
+	m.logger.Info("启动 MCP 传输服务器", "address", m.config.Server.BindAddr)
 
-	// 启动 SSE 服务器
+	// 启动共享 HTTP 服务器（同时承载流式与 SSE 端点）
 	go func() {
-		if err := m.sseServer.Start(m.config.Server.BindAddr); err != nil && err != http.ErrServerClosed {
-			m.logger.Error("SSE 服务器启动失败", "error", err)
+		if err := m.streamServer.Start(m.config.Server.BindAddr); err != nil && err != http.ErrServerClosed {
+			m.logger.Error("HTTP 流式服务器启动失败", "error", err)
 		}
 	}()
 
@@ -231,20 +259,39 @@ func (m *MCPServer) Start(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := m.sseServer.Shutdown(shutdownCtx); err != nil {
-		m.logger.Error("SSE 服务器关闭失败", "error", err)
-		return err
+	var shutdownErr error
+	if err := m.streamServer.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+		m.logger.Error("HTTP 流式服务器关闭失败", "error", err)
+		shutdownErr = err
+	}
+	if m.sseServer != nil {
+		if err := m.sseServer.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+			m.logger.Error("SSE 服务器关闭失败", "error", err)
+			if shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
 	}
 
-	return nil
+	return shutdownErr
 }
 
 // Stop 停止 MCP 服务器
 func (m *MCPServer) Stop() error {
-	if m.sseServer != nil {
-		return m.sseServer.Shutdown(context.Background())
+	var stopErr error
+	if m.streamServer != nil {
+		if err := m.streamServer.Shutdown(context.Background()); err != nil && err != http.ErrServerClosed {
+			stopErr = err
+		}
 	}
-	return nil
+	if m.sseServer != nil {
+		if err := m.sseServer.Shutdown(context.Background()); err != nil && err != http.ErrServerClosed {
+			if stopErr == nil {
+				stopErr = err
+			}
+		}
+	}
+	return stopErr
 }
 
 // 处理工具调用
