@@ -150,9 +150,6 @@ func (m *MCPServer) registerTools() {
 		mcp.WithNumber("timeout_sec",
 			mcp.Description("Timeout in seconds for command execution (default: 30)"),
 		),
-		mcp.WithString("auth_token",
-			mcp.Description("Server auth token (if configured)"),
-		),
 	)
 	m.server.AddTool(execCommandTool, m.handleExecCommand)
 
@@ -176,9 +173,6 @@ func (m *MCPServer) registerTools() {
 		mcp.WithBoolean("enable_pty",
 			mcp.Description("Whether to request a pseudo-terminal (PTY) when executing the script"),
 		),
-		mcp.WithString("auth_token",
-			mcp.Description("Server auth token (if configured)"),
-		),
 	)
 	m.server.AddTool(execScriptTool, m.handleExecScript)
 
@@ -188,9 +182,6 @@ func (m *MCPServer) registerTools() {
 		mcp.WithString("type",
 			mcp.Description("Type of items to list: 'all', 'commands', or 'scripts' (default: 'all')"),
 			mcp.WithStringEnumItems([]string{"all", "commands", "scripts"}),
-		),
-		mcp.WithString("auth_token",
-			mcp.Description("Server auth token (if configured)"),
 		),
 	)
 	m.server.AddTool(listCommandsTool, m.handleListCommands)
@@ -202,18 +193,12 @@ func (m *MCPServer) registerTools() {
 			mcp.Required(),
 			mcp.Description("The unique identifier of the remote host to test connection for"),
 		),
-		mcp.WithString("auth_token",
-			mcp.Description("Server auth token (if configured)"),
-		),
 	)
 	m.server.AddTool(testConnectionTool, m.handleTestConnection)
 
 	// 注册 list_hosts 工具
 	listHostsTool := mcp.NewTool("list_hosts",
 		mcp.WithDescription("List all configured SSH hosts"),
-		mcp.WithString("auth_token",
-			mcp.Description("Server auth token (if configured)"),
-		),
 	)
 	m.server.AddTool(listHostsTool, m.handleListHosts)
 
@@ -232,9 +217,6 @@ func (m *MCPServer) registerTools() {
 		),
 		mcp.WithString("notes",
 			mcp.Description("Optional notes or ticket reference for auditing"),
-		),
-		mcp.WithString("auth_token",
-			mcp.Description("Server auth token (if configured)"),
 		),
 	)
 	m.server.AddTool(approveCommandTool, m.handleApproveCommand)
@@ -814,15 +796,8 @@ func (m *MCPServer) checkAuth(ctx context.Context, req mcp.CallToolRequest) erro
 		return nil
 	}
 
-	provided := strings.TrimSpace(req.GetString("auth_token", ""))
-
-	if provided == "" && req.Params.Meta != nil && req.Params.Meta.AdditionalFields != nil {
-		if v, ok := req.Params.Meta.AdditionalFields["auth_token"].(string); ok {
-			provided = strings.TrimSpace(v)
-		}
-	}
-
-	if provided == "" && req.Header != nil {
+	var provided string
+	if req.Header != nil {
 		if authHeader := strings.TrimSpace(req.Header.Get("Authorization")); authHeader != "" {
 			const bearer = "bearer "
 			lower := strings.ToLower(authHeader)
@@ -838,10 +813,10 @@ func (m *MCPServer) checkAuth(ctx context.Context, req mcp.CallToolRequest) erro
 			Type:     "auth_failed",
 			Outcome:  audit.OutcomeDenied,
 			Severity: audit.SeverityHigh,
-			Reason:   "missing auth token",
+			Reason:   "missing Authorization header with Bearer token",
 			Metadata: map[string]interface{}{"has_token": false},
 		})
-		return fmt.Errorf("unauthorized: missing auth token")
+		return fmt.Errorf("unauthorized: missing Authorization header with Bearer token")
 	}
 	if provided != expected {
 		m.logAudit(ctx, audit.Event{

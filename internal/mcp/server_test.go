@@ -907,12 +907,14 @@ func TestMCPServer_AuthTokenRequired(t *testing.T) {
 	}
 
 	res, _ := server.handleListHosts(context.Background(), makeReq(map[string]any{}, http.Header{}))
-	assertError(res, "missing auth token")
-
-	res, _ = server.handleListHosts(context.Background(), makeReq(map[string]any{"auth_token": "wrong"}, http.Header{}))
-	assertError(res, "invalid auth token")
+	assertError(res, "missing Authorization header")
 
 	header := http.Header{}
+	header.Set("Authorization", "Bearer wrong-token")
+	res, _ = server.handleListHosts(context.Background(), makeReq(map[string]any{}, header))
+	assertError(res, "invalid auth token")
+
+	header = http.Header{}
 	header.Set("Authorization", "Bearer secret-token")
 	res, _ = server.handleListHosts(context.Background(), makeReq(map[string]any{}, header))
 	if res == nil || res.IsError {

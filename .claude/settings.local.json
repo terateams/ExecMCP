@@ -53,7 +53,9 @@
       "Bash(docker build:*)",
       "Bash(CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build:*)",
       "Bash(./execmcp:*)",
-      "Bash(gofmt:*)"
+      "Bash(gofmt:*)",
+      "Bash(git tag:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
